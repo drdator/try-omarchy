@@ -203,6 +203,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let savePortForwarding: ([PortForwardMapping]) -> String?
     private let immersiveMode: () -> Bool
     private let setImmersiveMode: (Bool) -> Void
+    private let startAutomatically: () -> Bool
+    private let setStartAutomatically: (Bool) -> Void
     private let launch: () -> Void
     private let canResetStorage: Bool
     private let storageLocation: () -> String?
@@ -283,6 +285,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         savePortForwarding: @escaping ([PortForwardMapping]) -> String? = { _ in nil },
         immersiveMode: @escaping () -> Bool = { true },
         setImmersiveMode: @escaping (Bool) -> Void = { _ in },
+        startAutomatically: @escaping () -> Bool = { false },
+        setStartAutomatically: @escaping (Bool) -> Void = { _ in },
         launch: @escaping () -> Void
     ) {
         self.accessibilityStatus = accessibilityStatus
@@ -307,6 +311,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.savePortForwarding = savePortForwarding
         self.immersiveMode = immersiveMode
         self.setImmersiveMode = setImmersiveMode
+        self.startAutomatically = startAutomatically
+        self.setStartAutomatically = setStartAutomatically
         self.launch = launch
 
         window = NSWindow(
@@ -399,7 +405,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     func launchDidAbort() {
         guard launchInProgress else { return }
         launchInProgress = false
-        render()
+        show()
     }
 
     /// Clears the resetting state when the controller refused to start the
@@ -415,7 +421,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     func launchRequiresReset() {
         guard launchInProgress else { return }
         launchInProgress = false
-        render()
+        show()
 
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -430,6 +436,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     /// the gap between presenting the explanation and receiving the answer.
     func confirmBootRecovery() -> Bool {
         guard launchInProgress else { return false }
+        show()
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = StartMenuPresentation.bootRecoveryConfirmationTitle
@@ -442,7 +449,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     func launchDidFail(errorMessage: String) {
         guard launchInProgress else { return }
         launchInProgress = false
-        render()
+        show()
 
         let alert = NSAlert()
         alert.alertStyle = .critical
@@ -715,6 +722,24 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             launchButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 500),
         ])
 
+        let automaticStart = NSButton(
+            checkboxWithTitle: "Start automatically",
+            target: self,
+            action: #selector(changeStartAutomatically(_:))
+        )
+        automaticStart.state = startAutomatically() ? .on : .off
+        automaticStart.isEnabled = launchButton.isEnabled
+        automaticStart.identifier = NSUserInterfaceItemIdentifier("automatic-start-checkbox")
+        let automaticStartHelp = "Skip this menu on launch. Hold Option while opening the app to show it again."
+        automaticStart.setAccessibilityHelp(automaticStartHelp)
+        let automaticStartCaption = NSTextField(wrappingLabelWithString: automaticStartHelp)
+        automaticStartCaption.font = .systemFont(ofSize: 12)
+        automaticStartCaption.textColor = .secondaryLabelColor
+        let automaticStartSection = NSStackView(views: [automaticStart, automaticStartCaption])
+        automaticStartSection.orientation = .vertical
+        automaticStartSection.alignment = .leading
+        automaticStartSection.spacing = 3
+
         let footerText = "by @martiano"
         let footerTitle = NSMutableAttributedString(
             string: footerText,
@@ -745,7 +770,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         ])
 
         let stack = NSStackView(
-            views: [headingStack, permissionCard, resetSection, launchButton, footerContainer]
+            views: [headingStack, permissionCard, resetSection, automaticStartSection, launchButton, footerContainer]
         )
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -785,6 +810,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -20),
             permissionCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
             resetSection.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
+            automaticStartSection.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            automaticStartCaption.widthAnchor.constraint(equalTo: automaticStartSection.widthAnchor),
             launchButton.widthAnchor.constraint(equalTo: stack.widthAnchor),
             footerContainer.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
@@ -1381,7 +1408,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         }
     }
 
-    @objc private func launchOmarchy() {
+    @objc private func changeStartAutomatically(_ sender: NSButton) {
+        guard !launchInProgress, !resetInProgress else { return }
+        setStartAutomatically(sender.state == .on)
+    }
+
+    @objc func launchOmarchy() {
         guard !launchInProgress,
               !resetInProgress,
               !microphoneRequestInFlight,

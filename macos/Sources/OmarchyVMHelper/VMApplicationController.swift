@@ -54,6 +54,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let sharedFolderStore: SharedFolderPreferenceStore
     private let portForwardingStore: PortForwardingPreferenceStore
     private let fullscreenPreferenceStore: FullscreenPreferenceStore
+    private let startupPreferenceStore: StartupPreferenceStore
     private let storageLocationStore: StorageLocationPreferenceStore
     private let volumeProbe: VolumeProbing
     private let volumeRootDetector: VolumeRootDetecting
@@ -92,6 +93,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         sharedFolderStore: SharedFolderPreferenceStore = SharedFolderPreferenceStore(),
         portForwardingStore: PortForwardingPreferenceStore = PortForwardingPreferenceStore(),
         fullscreenPreferenceStore: FullscreenPreferenceStore = FullscreenPreferenceStore(),
+        startupPreferenceStore: StartupPreferenceStore = StartupPreferenceStore(),
         storageLocationStore: StorageLocationPreferenceStore = StorageLocationPreferenceStore(),
         volumeProbe: VolumeProbing = URLVolumeProbe(),
         volumeRootDetector: VolumeRootDetecting = FileManagerVolumeRootDetector(),
@@ -106,6 +108,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.sharedFolderStore = sharedFolderStore
         self.portForwardingStore = portForwardingStore
         self.fullscreenPreferenceStore = fullscreenPreferenceStore
+        self.startupPreferenceStore = startupPreferenceStore
         self.storageLocationStore = storageLocationStore
         self.volumeProbe = volumeProbe
         self.volumeRootDetector = volumeRootDetector
@@ -116,14 +119,19 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         observeVolumeUnmounts()
         observeHostPowerEvents()
-        showStartMenu()
+        let startAutomatically = StartupPolicy.shouldStartAutomatically(
+            isEnabled: startupPreferenceStore.load(),
+            optionKeyHeld: NSEvent.modifierFlags.contains(.option),
+            initialArguments: initialArguments
+        )
+        prepareStartMenu(startAutomatically: startAutomatically)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
         startMenuWindow?.applicationDidBecomeActive()
     }
 
-    private func showStartMenu() {
+    private func prepareStartMenu(startAutomatically: Bool) {
         let resetOptions = [
             QEMUGPUStorageOption.resetStorage.rawValue,
             QEMUGPUStorageOption.resetStorageOnly.rawValue,
@@ -204,14 +212,24 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
                     FullscreenPreferences(isImmersive: isImmersive)
                 )
             },
+            startAutomatically: { [weak self] in
+                self?.startupPreferenceStore.load() ?? false
+            },
+            setStartAutomatically: { [weak self] enabled in
+                self?.startupPreferenceStore.save(enabled)
+            },
             launch: { [weak self] in
                 self?.startVirtualMachine()
             }
         )
         startMenuWindow = startMenu
-        startMenu.show()
-        if initialResetRequested {
-            startMenu.promptForReset()
+        if startAutomatically {
+            startMenu.launchOmarchy()
+        } else {
+            startMenu.show()
+            if initialResetRequested {
+                startMenu.promptForReset()
+            }
         }
     }
 
@@ -626,6 +644,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             )
             return .available
         } catch {
+            startMenuWindow?.show()
             let alert = NSAlert()
             alert.alertStyle = .critical
             alert.messageText = "Omarchy\u{2019}s data folder is unavailable"
