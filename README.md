@@ -17,6 +17,7 @@ Omarchy's trademark rights.
 ## Highlights
 
 - Hardware-accelerated ARM64 virtualization and VirGL graphics
+- Nested KVM virtualization on M3 and newer Apple Silicon
 - Resizable native window with automatic guest resolution and HiDPI scale updates
 - Mac audio input/output selection inside Omarchy, with live routing and system-default fallback
 - FaceTime HD and other Mac cameras exposed to Omarchy as an on-demand 720p webcam
@@ -137,7 +138,7 @@ port. The `dtc` mirror should be reverted once kernel.org returns.
 
 ## Quick start
 
-1. Open [Releases](https://github.com/themartiano/try-omarchy/releases) and download the latest signed and notarized `.dmg`.
+1. Open [Releases](https://github.com/omacom/try-omarchy/releases) and download the latest signed and notarized `.dmg`.
 2. Open the DMG and drag **Try Omarchy** to **Applications**.
 3. Launch **Try Omarchy** from Applications.
 
@@ -145,12 +146,24 @@ By default, every launch begins at the start menu. Enable **Start automatically*
 
 While that menu is open, Try Omarchy behaves like a regular Mac app with standard Quit, Close Window, and Minimize commands; after the VM starts, that native app chrome steps aside for Omarchy. **Immersive** is on by default, so Omarchy opens Full Screen with the Mac menu bar and Dock hidden. Turn it off to open a resizable window; if you later enter Full Screen, the Mac menu bar and Dock remain available at the screen edges. Whenever the Omarchy window is focused, Command belongs to the guest as Super in either mode; Accessibility permission lets system shortcuts such as Command-Space reach it before macOS. Microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
 
-Inside Omarchy, choose **Setup → Try Omarchy Settings**, search for **Try Omarchy Settings**, or run `omarchy-native-settings` to reopen the Mac settings window. You can change automatic startup, permissions, sharing, port forwarding, and immersive mode here. Sharing, ports, and immersive mode are saved for the next launch; **Restart Try Omarchy…** shuts down Linux and starts a new VM process to apply them. Save your work first. A disposable VM keeps its disk across this restart until you close the app.
+Inside Omarchy, choose **Setup → Try Omarchy Settings**, search for **Try Omarchy Settings**, or run `omarchy-native-settings` to reopen the Mac settings window. You can change automatic startup, permissions, CPU, memory, sharing, port forwarding, and immersive mode here. CPU, memory, sharing, ports, and immersive mode are saved for the next launch; **Restart Try Omarchy…** shuts down Linux and starts a new VM process to apply them. Save your work first. A disposable VM keeps its disk across this restart until you close the app.
 
 For VM location and reset, choose **Shut down to manage…**. The settings window stays open even with automatic startup enabled; reset still asks for confirmation. **Done** or closing the running settings window returns to Omarchy without stopping it. Existing VMs [receive settings access automatically](guest/README.md#settings-access-from-an-existing-vm) when launched with the updated app, without a reset or manual installation.
 
 Restarting from inside Omarchy reboots the guest in the same Try Omarchy app.
 Shutting down Omarchy closes the app and leaves it closed.
+
+## Virtual machine resources
+
+Choose **Resources → Configure…** on the start menu to adjust processor cores
+and memory for the next launch. Processor cores range from 4 to all the cores
+on this Mac; the default remains up to 8 cores. Memory keeps the existing 4 GiB
+default and offers 6, 8, 12, or 16 GiB when at least 8 GiB remains for macOS.
+
+**Save** remembers both choices. **Cancel** leaves them unchanged, and
+**Use Defaults** restores the draft until you save. Existing memory preferences
+are carried forward. A choice that no longer fits a smaller Mac falls back to
+its default without erasing the saved choice.
 
 ## 1Password
 
@@ -255,11 +268,75 @@ Loopback binding prevents devices on Wi-Fi, Ethernet, or the wider LAN from
 connecting. It does not isolate the listener from other users or processes on
 the same Mac; guest SSH authentication is still required.
 
+### Touch ID for sudo
+
+The native authentication bridge can enroll this Mac and use
+Touch ID as a sufficient authentication method for guest `sudo`. Open
+**Omarchy Menu → Setup → Security → Touch ID for sudo**, or run:
+
+```sh
+try-omarchy-touch-id
+```
+
+The integration ships disabled. Enabling first requires the normal guest sudo
+password, then Touch ID creates and proves possession of a Secure Enclave
+signing key. Only after that succeeds is the narrowly scoped sudo PAM rule
+installed. The menu then offers Test, Re-pair, and Disable actions.
+
+The Mac stores only the Secure Enclave's device-bound encrypted key
+representation. Every later approval is signed over a root-private guest ID,
+fresh challenge, the sudo user and requesting user, the interactive TTY, and a
+15-second validity window. Each enrolled guest has a distinct host signing key.
+The QEMU window must be frontmost. Cancellation, invalid responses, missing
+enrollment, and unavailable Touch ID all fall back to the normal guest password;
+no login or screen-unlock PAM policy is changed.
+
+If Touch ID falls back, sudo displays the reason before asking for the guest
+password. Signed approvals require synchronized Mac and guest clocks; factory
+images enable `systemd-timesyncd` at boot. On an existing guest with clock drift,
+run `sudo systemctl enable --now systemd-timesyncd.service`, then check
+`timedatectl` for `System clock synchronized: yes` before retrying.
+
+The Touch ID test refuses guest-password fallback and returns failure if sudo
+cannot authenticate. A passwordless sudo policy can also satisfy this check;
+the result only demonstrates Touch ID when its prompt appeared. Unanswered Mac
+prompts are canceled after 55 seconds, before the guest's 65-second timeout.
+Late responses are discarded without extending the current request's deadline.
+
+Enrollment persists across guest and Mac restarts for the same persistent VM,
+Mac, and macOS account. Factory Reset, moving the VM to another Mac or account,
+or changing the enrolled Touch ID fingerprint set requires re-pairing. Disabling
+removes the guest enrollment and, while the host bridge is available, its wrapped
+Secure Enclave key representation.
+
+## Giving Omarchy more memory
+
+Use **Resources → Configure…** on the start menu to pick how much of the Mac's
+RAM the guest boots with. The default is 4 GiB, and the menu only offers larger allocations
+(6, 8, 12, or 16 GiB) that leave macOS at least 8 GiB for itself, so an 8 GiB
+Mac shows the default alone. The choice is not tied to installation: change it
+before any launch, and it applies the next time Omarchy starts. Memory is a
+boot-time QEMU setting, never part of the guest image or VM data, so switching
+allocations never needs a reset and never touches your files. A stored choice
+that no longer fits the Mac it runs on falls back to the default.
+
+Scripted launches can set `OMARCHY_QEMU_GPU_MEMORY_MIB` (a whole number of
+MiB) instead. The launcher's own rule is looser than the menu's: it refuses
+values below the guest's 2048 MiB minimum, and values above the 4096 default
+that would leave the host under 4 GiB. The default itself always boots, and
+an environment value the menu would not offer (say 12 GiB on a 16 GiB Mac)
+is still accepted — the menu is deliberately conservative, the launcher is a
+safety floor.
+
 ## Requirements
 
 - Apple Silicon Mac (`arm64`)
 - macOS 15 or newer
 - At least 8 GB free initially
+
+On M3 and newer Apple Silicon, Try Omarchy also exposes ARM EL2 to Linux, so
+the guest provides `/dev/kvm` for nested VMs and compatible VMMs. Older Apple
+Silicon Macs automatically keep the normal non-nested launch path.
 
 ## Data and updates
 
@@ -271,6 +348,17 @@ with that disk. A newer app's bundled factory image is used only to create a
 new VM, after a confirmed **Reset Omarchy**, or for an ephemeral launch.
 Before Reset is enabled, the confirmation sheet requires typing `Try Omarchy`
 exactly; cancelling the sheet returns to the start menu without changing the VM.
+
+### Guest console log
+
+Each persistent launch writes the guest console to
+`~/Library/Application Support/Try Omarchy/VM/v1/console.log`, and moves the
+previous launch's log aside to `console.log.1` first. This is the record to
+read when Omarchy fails to boot, loses its network, or hangs, because a fault
+that forces a reboot is otherwise gone by the time you can look. An ephemeral
+launch keeps its log with the rest of its temporary state and discards it on
+exit. The log holds whatever the guest prints to its console, so treat it as
+guest data and review it before attaching it to a bug report.
 
 VMs created before paired boot files were introduced are preserved too. On the
 first launch that needs them, Try Omarchy explains the transition in a
@@ -290,6 +378,47 @@ local repository. Installing a newer Try Omarchy app therefore does not apply
 all of that app's factory-image changes to an existing VM, and an in-guest
 update should not be assumed to reproduce them. A confirmed reset is the
 deliberate, destructive way to start again from the newest bundled factory.
+
+### Growing an existing VM disk
+
+To add capacity without resetting the VM, shut down Omarchy and run the
+maintenance command from a source checkout on the Mac:
+
+```sh
+# Preview a new total capacity of 32 GiB.
+macos/resize-vm-disk.sh --size-gib 32
+
+# Retain a verified backup, then enlarge the stopped disk.
+macos/resize-vm-disk.sh --size-gib 32 --apply
+```
+
+Run as the macOS user who owns the VM, without `sudo`. The command requires
+Python 3 and an APFS volume, but does not require building the app. It uses the
+same workspace lock as the launcher and refuses an active VM, shrinking,
+unrecognized metadata, or a missing/invalid paired boot kit. An equal size is
+a no-op. Whole-number targets up to 8192 GiB are accepted.
+
+The default state directory is
+`~/Library/Application Support/Try Omarchy/VM/v1`. For a custom VM location,
+pass `--state-root "/path/to/selected-folder/VM/v1"`, using the directory that
+contains `.omarchy-qemu-storage` and `disks/current`. The command does not read
+the app's saved location preference or select legacy development workspaces.
+
+The backup is an APFS clone in a private sibling directory named
+`v1.resize-backup.XXXXXX`; the command prints its exact path. It retains the
+original disk, disk metadata, and paired boot files and verifies the disk's
+checksum before resizing; reading both full disk images can take several
+minutes. Keep it until the resized VM is working. To roll back, shut down the
+VM and restore its original disk from this backup; any
+writes made after the backup would be lost, so preserve the newer disk first.
+Never shrink the enlarged disk to undo the operation.
+
+The host must have free space for the requested increase plus 1 GiB of
+headroom. Growth is sparse, not a reservation of host capacity, and retained
+clones consume additional space as their contents diverge. On the next normal
+boot, the guest's enabled `systemd-growfs-root.service` grows ext4 to fill the
+disk. Verify inside Omarchy with `lsblk` and `df -h /`. No app rebuild, guest
+reinstall, or change to the factory image is needed.
 
 ### Choosing where the VM lives
 
@@ -447,7 +576,7 @@ The architecture and trust boundaries are documented in [`docs/architecture.md`]
 
 Try Omarchy is pre-1.0 and under active development. Omarchy and bundled dependencies retain their own licenses; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-Report ordinary bugs through [GitHub Issues](https://github.com/themartiano/try-omarchy/issues). Report suspected vulnerabilities using the private process in [`SECURITY.md`](SECURITY.md), not a public issue.
+Report ordinary bugs through [GitHub Issues](https://github.com/omacom/try-omarchy/issues). Report suspected vulnerabilities using the private process in [`SECURITY.md`](SECURITY.md), not a public issue.
 
 Try Omarchy's original code is licensed under the [MIT License](LICENSE).
 

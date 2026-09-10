@@ -151,12 +151,18 @@ for device in \
   virtio-net-pci \
   virtio-rng-pci \
   virtio-serial-pci \
-  virtio-tablet-pci; do
+  virtio-tablet-pci \
+  virtio-pinch-pci; do
   require_qemu_device "$device"
 done
 for marker in guest_owner_uid guest_owner_gid; do
   LC_ALL=C grep -aFq "$marker" "$qemu_bin" || {
     fail "staged QEMU lacks the shared-folder owner mapping; run make runtime"
+  }
+done
+for marker in hv_vm_config_set_el2_enabled hv_gic_create; do
+  LC_ALL=C grep -aFq "$marker" "$qemu_bin" || {
+    fail "staged QEMU lacks HVF nested virtualization; run make runtime"
   }
 done
 
@@ -361,6 +367,7 @@ runtime = exact_keys(
     spec.get("runtime"),
     {
         "audio",
+        "authentication",
         "camera",
         "clipboard",
         "compressedDisk",
@@ -402,6 +409,20 @@ clipboard = {
     "device": "virtserialport",
     "port": "dev.tryomarchy.clipboard",
     "formats": ["text/plain;charset=utf-8", "image/png"],
+}
+authentication = {
+    "activation": "explicit-menu-opt-in",
+    "approvalLifetimeSeconds": 15,
+    "authorizationScope": "sudo-authentication",
+    "device": "virtserialport",
+    "guestDeviceMode": "0600",
+    "guestIdentity": "root-private-random-256-bit",
+    "hostKey": "per-guest-secure-enclave-p256",
+    "pamService": "sudo",
+    "port": "dev.tryomarchy.authentication",
+    "protocolVersion": 3,
+    "requiresEnrollment": True,
+    "signature": "ecdsa-p256-sha256",
 }
 shared_folder = {
     "device": "virtio-9p-pci",
@@ -479,6 +500,7 @@ if (
     or runtime.get("camera") != camera
     or runtime.get("storage") != storage
     or runtime.get("clipboard") != clipboard
+    or runtime.get("authentication") != authentication
     or runtime.get("sharedFolder") != shared_folder
     or runtime.get("devices") != expected_devices
     or runtime.get("minimumMemoryMiB") != 2048
@@ -505,6 +527,8 @@ if (
     fail("upstream identity is not pinned")
 
 supply_chain_keys = {
+    "aquamarine",
+    "hyprtoolkit",
     "archLinuxArmPackagesCommit",
     "archLinuxArmPackagesRepository",
     "hyprland",
@@ -513,6 +537,7 @@ supply_chain_keys = {
     "omarchyPackagesRepository",
     "ttfx",
     "vivaldi",
+    "voxtype",
     "yay",
 }
 supply_chain = exact_keys(spec.get("supplyChain"), supply_chain_keys, "build spec supply chain")
@@ -570,8 +595,58 @@ exact_keys(
 hyprland_identity = hashlib.sha256(
     json.dumps(hyprland, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()
-if hyprland_identity != "f3855f9bc084ee047657484400f413bb37d0797d71c64b9d9c2e459bdbc67bf5":
+if hyprland_identity != "ae82ce3f989eff555f1faa2400ff0ecb3d7b52b4797c6e3f4fca29959e5a7790":
     fail("factory Hyprland component is not the reviewed rounded-border build")
+aquamarine = exact_keys(
+    supply_chain.get("aquamarine"),
+    {
+        "binarySha256",
+        "license",
+        "packagingCommit",
+        "packagingRepository",
+        "pkgbuild",
+        "pkgbuildSha256",
+        "pkgrel",
+        "repository",
+        "sha256",
+        "url",
+        "version",
+    },
+    "build spec aquamarine component",
+)
+if aquamarine != {
+    "version": "0.14.0",
+    "pkgrel": "2",
+    "repository": "https://github.com/hyprwm/aquamarine",
+    "url": "https://github.com/hyprwm/aquamarine/archive/v0.14.0/aquamarine-0.14.0.tar.gz",
+    "sha256": "5dcf0b17f7dd51539fd7e79d68484f04240b3b63cf9f5f21d5b6dea0088168f9",
+    "pkgbuild": "pinned-packages/aquamarine/PKGBUILD",
+    "pkgbuildSha256": "1bd4197238a4f0092216ab2dfd723126d618cceb977d45865e140a488a8f56ff",
+    "packagingRepository": "https://gitlab.archlinux.org/archlinux/packaging/packages/aquamarine.git",
+    "packagingCommit": "8489a8358817a964a923f05ba324996378d81a5d",
+    "license": "BSD-3-Clause",
+    "binarySha256": "7da003aa60e008e9f514c312f01c1e967983e2c46732d58953735bfaee3fd8aa",
+}:
+    fail("factory aquamarine component is not the reviewed libaquamarine.so=13 rebuild")
+hyprtoolkit = exact_keys(
+    supply_chain.get("hyprtoolkit"),
+    set(aquamarine),
+    "build spec hyprtoolkit component",
+)
+if hyprtoolkit != {
+    "version": "0.5.4",
+    "pkgrel": "6.1",
+    "repository": "https://github.com/hyprwm/hyprtoolkit",
+    "url": "https://github.com/hyprwm/hyprtoolkit/archive/v0.5.4/hyprtoolkit-0.5.4.tar.gz",
+    "sha256": "2fb59789f231c1c4e9154ceffc1e7524c0cae154807c0d57e6166806255b570f",
+    "pkgbuild": "pinned-packages/hyprtoolkit/PKGBUILD",
+    "pkgbuildSha256": "803f1db19ad1d42e48b638e35256d3dabbe19d1d0b4b3fd584eedf20121256ce",
+    "packagingRepository": "https://gitlab.archlinux.org/archlinux/packaging/packages/hyprtoolkit.git",
+    "packagingCommit": "1ed230388a2ccb2c857af980235cf25a4f86e39e",
+    "license": "BSD-3-Clause",
+    "binarySha256": "dc814fad9723bfcf66dbd29b7f8c5cc96fd63a1ff623909e466dd9d011c0cba8"
+}:
+    fail("factory hyprtoolkit component is not the reviewed libaquamarine.so=13 rebuild")
 mise = exact_keys(
     supply_chain.get("mise"),
     {"binarySha256", "license", "reportedVersion", "sha256", "url", "version"},
@@ -620,11 +695,11 @@ if ttfx != {
     "url": "https://github.com/omacom-io/ttfx/archive/refs/tags/v0.3.2.tar.gz",
     "sha256": "d0c0df4867e7f03142fb7f77c66670d0e8da15534239c1a7abfd89f19dfc00f6",
     "cargoLockSha256": "49e2091962fc4d425b4cf3bde1a105719b5b50eed0583ec90e85922adb45e2ce",
-    "binarySha256": "9171a07c752b202a21f80a4ad336a9d093be06a6c96b062e8b5e0c158d2a86d2",
+    "binarySha256": "d034cc5b9a8d410ce93113ef0a5d27b5ee2327948562bf2b0e756eebd326fa8f",
     "target": "aarch64-unknown-linux-gnu",
-    "rustPackageVersion": "rust 1:1.98.0-1",
-    "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
-    "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)",
+    "rustPackageVersion": "rust 1:1.98.1-1",
+    "rustcVersion": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+    "cargoVersion": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
     "reportedVersion": "ttfx 0.3.2",
     "license": "MIT",
     "licenseSha256": "175441de2eb9a0d3f0627c404ad71929336fd98d75926cc27b9e364d35cc7977",
@@ -687,6 +762,41 @@ if vivaldi != {
     "license": "Multiple, see https://www.vivaldi.com/",
 }:
     fail("Vivaldi installer is not pinned to the reviewed signed ARM64 release")
+voxtype = exact_keys(
+    supply_chain.get("voxtype"),
+    {
+        "assets",
+        "license",
+        "pkgrel",
+        "reportedVersion",
+        "repository",
+        "signingFingerprint",
+        "signingKey",
+        "signingKeySha256",
+        "sourceSha256",
+        "sourceSignatureSha256",
+        "sourceSignatureUrl",
+        "sourceUrl",
+        "version",
+    },
+    "build spec voxtype component",
+)
+voxtype_assets = exact_keys(
+    voxtype.get("assets"),
+    {"audioBridge", "cpu", "onnx", "osd", "osdGtk4", "osdQuickshell"},
+    "build spec voxtype assets",
+)
+for name, asset in voxtype_assets.items():
+    exact_keys(
+        asset,
+        {"sha256", "signatureSha256", "signatureUrl", "url"},
+        f"build spec voxtype asset {name}",
+    )
+voxtype_identity = hashlib.sha256(
+    json.dumps(voxtype, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+if voxtype_identity != "906951dd6a221d39a63116af86dddf77c202bf8dfca59cccc73536c44cd22669":
+    fail("factory Voxtype component is not the reviewed signed ARM64 release")
 
 command_line = runtime.get("kernelCommandLine")
 if not isinstance(command_line, str) or not command_line or any(character in command_line for character in "\x00\r\n\t"):
@@ -847,12 +957,49 @@ host_cpu_count=$(
 ) || {
   fail "cannot determine the host CPU count"
 }
-[[ $host_cpu_count =~ ^[0-9]+$ ]] || fail "host CPU count is invalid: $host_cpu_count"
-vcpu_count=8
-if (( host_cpu_count < vcpu_count )); then
-  vcpu_count=$host_cpu_count
+[[ $host_cpu_count =~ ^[1-9][0-9]{0,6}$ ]] || fail "host CPU count is invalid: $host_cpu_count"
+(( host_cpu_count >= 4 )) || fail "the ARM guest requires at least four host CPUs"
+default_vcpu_count=8
+if (( host_cpu_count < default_vcpu_count )); then
+  default_vcpu_count=$host_cpu_count
 fi
-(( vcpu_count >= 4 )) || fail "the ARM guest requires at least four host CPUs"
+vcpu_count=${OMARCHY_QEMU_GPU_CPUS-$default_vcpu_count}
+# Bound and validate decimal text before shell arithmetic: reject expressions,
+# leading zeroes (octal), and values that could wrap a signed integer.
+[[ $vcpu_count =~ ^[1-9][0-9]{0,6}$ ]] || fail "OMARCHY_QEMU_GPU_CPUS must be a whole number in canonical decimal"
+(( vcpu_count >= 4 && vcpu_count <= host_cpu_count )) || {
+  fail "OMARCHY_QEMU_GPU_CPUS must be between 4 and $host_cpu_count"
+}
+
+# Guest memory is a boot-time allocation. The Swift app resolves the user's
+# stored choice against this host before exporting it; re-check independently
+# here so a hand-set environment value can never start a guest below the
+# manifest's minimumMemoryMiB or starve the host. The 4096 default matches the
+# manifest's recommendedMemoryMiB, both verified at build time. The host cap
+# applies only above the default: 4096 has always booted unconditionally, and
+# hosts smaller than 8 GiB exist (CI runners), so gating the default on host
+# size would be a regression, not a safeguard.
+memory_mib=${OMARCHY_QEMU_GPU_MEMORY_MIB:-4096}
+# Seven digits bound the value below any real host while keeping the
+# arithmetic far from 64-bit wraparound; forcing base 10 stops bash from
+# reading a leading zero as octal while QEMU would read the same string as
+# decimal.
+[[ $memory_mib =~ ^[0-9]{1,7}$ ]] || fail "OMARCHY_QEMU_GPU_MEMORY_MIB must be a whole number of MiB"
+memory_mib=$((10#$memory_mib))
+(( memory_mib >= 2048 )) || fail "the ARM guest requires at least 2048 MiB of memory"
+if (( memory_mib > 4096 )); then
+  host_memory_bytes=$(sysctl -n hw.memsize 2>/dev/null) || fail "cannot determine the host memory size"
+  [[ $host_memory_bytes =~ ^[1-9][0-9]{0,17}$ ]] || fail "host memory size is invalid: $host_memory_bytes"
+  host_memory_mib=$((host_memory_bytes / 1048576))
+  (( memory_mib + 4096 <= host_memory_mib )) || {
+    fail "OMARCHY_QEMU_GPU_MEMORY_MIB must leave the host at least 4096 MiB (host has ${host_memory_mib} MiB)"
+  }
+fi
+if (( memory_mib % 1024 == 0 )); then
+  memory_display="$((memory_mib / 1024)) GiB"
+else
+  memory_display="${memory_mib} MiB"
+fi
 
 # The launcher publishes one optional Mac folder for the guest. The Swift app
 # canonicalizes and validates the selection first; re-check here so a stray
@@ -912,6 +1059,7 @@ owner_marker=""
 owner_token=""
 qemu_pid=""
 audio_bridge_pid=""
+authentication_bridge_pid=""
 camera_bridge_pid=""
 clipboard_bridge_pid=""
 
@@ -943,6 +1091,9 @@ cleanup() {
   fi
   if [[ $audio_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$audio_bridge_pid" 20
+  fi
+  if [[ $authentication_bridge_pid =~ ^[0-9]+$ ]]; then
+    terminate_child "$authentication_bridge_pid" 20
   fi
   if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$camera_bridge_pid" 20
@@ -1198,6 +1349,7 @@ chmod 600 "$owner_marker"
 # for cleanup, but expose the runtime sockets through that standardized alias.
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
 audio_bridge_socket="/tmp/${work_dir##*/}/audio.sock"
+authentication_bridge_socket="/tmp/${work_dir##*/}/authentication.sock"
 camera_bridge_socket="/tmp/${work_dir##*/}/camera.sock"
 clipboard_bridge_socket="/tmp/${work_dir##*/}/clipboard.sock"
 settings_bridge_socket="/tmp/${work_dir##*/}/settings.sock"
@@ -1307,14 +1459,50 @@ settings_kernel_argument=" systemd.set_credential_binary=systemd.extra-unit.try-
 # QEMU escapes commas in key-value option values by doubling them.
 settings_payload_escaped=${settings_payload//,/,,}
 
+# M3 and newer Apple Silicon can expose EL2 to this Linux guest. Probe the
+# actual Hypervisor.framework capability instead of guessing from a model name;
+# older Apple Silicon keeps the existing platform-GIC/EL1 launch path.
+qemu_virtualization_args=(-machine "$qemu_machine")
+if printf '%s\n' \
+    '{"execute":"qmp_capabilities"}' \
+    '{"execute":"quit"}' | \
+  "$qemu_bin" \
+    -machine 'virt,gic-version=3,virtualization=on' \
+    -accel 'hvf,kernel-irqchip=on' \
+    -cpu 'host,pmu=off' \
+    -smp 1 \
+    -m 128M \
+    -nodefaults \
+    -display none \
+    -S \
+    -qmp stdio >/dev/null 2>&1; then
+  qemu_virtualization_args=(
+    -machine 'virt,gic-version=3,virtualization=on'
+    -accel 'hvf,kernel-irqchip=on'
+  )
+  echo '[qemu-gpu] Nested virtualization is enabled.' >&2
+else
+  echo '[qemu-gpu] Nested virtualization is unavailable; using the compatible EL1 path.' >&2
+fi
+
+if [[ $QEMU_SELECTED_STORAGE_MODE == persistent && -n $QEMU_PERSISTENT_STORAGE_ROOT ]]; then
+  console_log="$QEMU_PERSISTENT_STORAGE_ROOT/console.log"
+else
+  console_log="$work_dir/console.log"
+fi
+if [[ -f $console_log ]]; then
+  mv -f "$console_log" "$console_log.1" 2>/dev/null || true
+fi
+console_log_option=${console_log//,/,,}
+
 qemu_args=(
   -name 'Try Omarchy'
-  -machine "$qemu_machine"
+  "${qemu_virtualization_args[@]}"
   # HVF does not provide a usable guest PMU on Apple Silicon. Do not advertise
   # one: Linux otherwise probes the dead device and prints a misleading failure.
   -cpu 'host,pmu=off'
   -smp "$vcpu_count,sockets=1,cores=$vcpu_count,threads=1"
-  -m 4G
+  -m "${memory_mib}M"
   -nodefaults
   # Reboot the guest inside this QEMU process, but let shutdown close the app.
   -action 'reboot=reset,shutdown=poweroff'
@@ -1340,6 +1528,7 @@ qemu_args=(
   -display "cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=$cocoa_full_screen,full-grab=on,immersive=$cocoa_immersive,swap-opt-cmd=off"
   -device 'virtio-keyboard-pci,romfile='
   -device 'virtio-tablet-pci,romfile='
+  -device 'virtio-pinch-pci,romfile='
   -object 'rng-random,id=omarchy-rng,filename=/dev/urandom'
   -device 'virtio-rng-pci,rng=omarchy-rng'
   -device virtio-balloon-pci
@@ -1347,13 +1536,15 @@ qemu_args=(
   -device 'virtio-9p-pci,fsdev=omarchy-settings,mount_tag=try-omarchy-settings,romfile='
   -device 'virtio-serial-pci,id=omarchy-serial'
   -chardev "socket,id=omarchy-settings-bridge,path=$settings_bridge_socket,server=on,wait=off"
-  -device 'virtserialport,bus=omarchy-serial.0,nr=3,chardev=omarchy-settings-bridge,name=dev.tryomarchy.settings'
-  -chardev 'stdio,id=omarchy-hvc0,signal=off'
+  -device 'virtserialport,bus=omarchy-serial.0,nr=5,chardev=omarchy-settings-bridge,name=dev.tryomarchy.settings'
+  -chardev "stdio,id=omarchy-hvc0,signal=off,logfile=$console_log_option,logappend=off"
   -device 'virtconsole,bus=omarchy-serial.0,nr=0,chardev=omarchy-hvc0'
   -chardev "socket,id=omarchy-audio-bridge,path=$audio_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=1,chardev=omarchy-audio-bridge,name=dev.tryomarchy.audio'
   -chardev "socket,id=omarchy-clipboard-bridge,path=$clipboard_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=2,chardev=omarchy-clipboard-bridge,name=dev.tryomarchy.clipboard'
+  -chardev "socket,id=omarchy-authentication-bridge,path=$authentication_bridge_socket,server=on,wait=off"
+  -device 'virtserialport,bus=omarchy-serial.0,nr=3,chardev=omarchy-authentication-bridge,name=dev.tryomarchy.authentication'
   -chardev "socket,id=omarchy-camera-bridge,path=$camera_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=4,chardev=omarchy-camera-bridge,name=dev.tryomarchy.camera'
 )
@@ -1388,6 +1579,8 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
     "$native_bridge" "$audio_bridge_socket" "$audio_route_dir" >&2
   printf '\n[qemu-gpu] clipboard bridge command: %q --bridge-native-clipboard QEMU_PID %q' \
     "$native_bridge" "$clipboard_bridge_socket" >&2
+  printf '\n[qemu-gpu] authentication bridge command: %q --bridge-native-authentication QEMU_PID %q' \
+    "$native_bridge" "$authentication_bridge_socket" >&2
   printf '\n[qemu-gpu] camera bridge command: %q --bridge-native-camera QEMU_PID %q' \
     "$native_bridge" "$camera_bridge_socket" >&2
   if [[ -n $shared_folder ]]; then
@@ -1404,10 +1597,10 @@ fi
 }
 
 if [[ $QEMU_SELECTED_STORAGE_MODE == persistent ]]; then
-  echo "[qemu-gpu] Starting the persistent ARM64 VirGL guest with $vcpu_count vCPUs and 4 GiB RAM." >&2
+  echo "[qemu-gpu] Starting the persistent ARM64 VirGL guest with $vcpu_count vCPUs and $memory_display RAM." >&2
   echo "[qemu-gpu] User data: $QEMU_PERSISTENT_STORAGE_DIRECTORY" >&2
 else
-  echo "[qemu-gpu] Starting a disposable ARM64 VirGL guest with $vcpu_count vCPUs and 4 GiB RAM." >&2
+  echo "[qemu-gpu] Starting a disposable ARM64 VirGL guest with $vcpu_count vCPUs and $memory_display RAM." >&2
 fi
 if [[ -n $shared_folder ]]; then
   echo "[qemu-gpu] Shared folder: $shared_folder (guest ~/$shared_folder_name)" >&2
@@ -1419,7 +1612,7 @@ printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
 chmod 600 "$work_dir/.qemu.pid"
 
 for ((attempt = 0; attempt < 100; attempt++)); do
-  if [[ -S $qmp_socket && -S $audio_bridge_socket && -S $camera_bridge_socket && -S $clipboard_bridge_socket && -S $settings_bridge_socket ]]; then
+  if [[ -S $qmp_socket && -S $audio_bridge_socket && -S $authentication_bridge_socket && -S $camera_bridge_socket && -S $clipboard_bridge_socket && -S $settings_bridge_socket ]]; then
     break
   fi
   kill -0 "$qemu_pid" 2>/dev/null || fail "QEMU exited before creating its private QMP socket"
@@ -1427,6 +1620,7 @@ for ((attempt = 0; attempt < 100; attempt++)); do
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
+[[ -S $authentication_bridge_socket ]] || fail "QEMU did not create its private authentication bridge socket"
 [[ -S $camera_bridge_socket ]] || fail "QEMU did not create its private camera bridge socket"
 [[ -S $clipboard_bridge_socket ]] || fail "QEMU did not create its private clipboard bridge socket"
 [[ -S $settings_bridge_socket ]] || fail "QEMU did not create its private settings bridge socket"
@@ -1445,6 +1639,14 @@ start_clipboard_bridge() {
 }
 start_clipboard_bridge
 clipboard_bridge_restarts=0
+
+start_authentication_bridge() {
+  "$native_bridge" --bridge-native-authentication \
+    "$qemu_pid" "$authentication_bridge_socket" 9>&- &
+  authentication_bridge_pid=$!
+}
+start_authentication_bridge
+authentication_bridge_restarts=0
 
 start_camera_bridge() {
   "$native_bridge" --bridge-native-camera \
@@ -1506,6 +1708,27 @@ while true; do
       fi
     fi
   fi
+  # Touch ID sudo remains optional to VM availability: signed-response failure
+  # falls back to the guest password. Reconnect a transiently failed helper.
+  if [[ $authentication_bridge_pid =~ ^[0-9]+$ ]]; then
+    authentication_bridge_state=$(ps -p "$authentication_bridge_pid" -o state= 2>/dev/null || true)
+    if [[ -z $authentication_bridge_state || $authentication_bridge_state == *Z* ]]; then
+      if wait "$authentication_bridge_pid"; then
+        authentication_bridge_status=0
+      else
+        authentication_bridge_status=$?
+      fi
+      authentication_bridge_pid=""
+      if (( authentication_bridge_restarts < 5 )); then
+        authentication_bridge_restarts=$((authentication_bridge_restarts + 1))
+        echo "[qemu-gpu] authentication bridge exited (status $authentication_bridge_status); restarting ($authentication_bridge_restarts/5)" >&2
+        sleep 1
+        start_authentication_bridge
+      else
+        echo "[qemu-gpu] Touch ID sudo is unavailable for the rest of this session; password authentication remains available" >&2
+      fi
+    fi
+  fi
   # Camera sharing is optional. A failed capture backend must not stop the VM;
   # reconnect it so a transient device change can recover in this session.
   if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
@@ -1550,6 +1773,10 @@ else
   wait "$audio_bridge_pid" 2>/dev/null || true
 fi
 audio_bridge_pid=""
+if [[ $authentication_bridge_pid =~ ^[0-9]+$ ]]; then
+  terminate_child "$authentication_bridge_pid" 20
+fi
+authentication_bridge_pid=""
 if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
   terminate_child "$clipboard_bridge_pid" 20
 fi

@@ -107,7 +107,7 @@ are preserved; those users can search for **Try Omarchy Settings** in the
 application launcher. Accounts without a custom extension file also receive
 **Setup → Try Omarchy Settings**. Home-directory operations run as that user.
 
-The settings window saves sharing, port forwarding, and immersive mode for the
+The settings window saves CPU, memory, sharing, port forwarding, and immersive mode for the
 next QEMU launch. **Restart Try Omarchy…** requests a clean Linux shutdown and
 waits for QEMU to exit before starting a new process with the saved settings.
 It never forces a shutdown on a timer. **Shut down to manage…** returns to the

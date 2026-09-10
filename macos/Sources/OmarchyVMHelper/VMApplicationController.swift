@@ -55,6 +55,8 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let portForwardingStore: PortForwardingPreferenceStore
     private let fullscreenPreferenceStore: FullscreenPreferenceStore
     private let startupPreferenceStore: StartupPreferenceStore
+    private let resourcePreferenceStore: VMResourcePreferenceStore
+    private let resourceLimits: VMResourceLimits
     private let storageLocationStore: StorageLocationPreferenceStore
     private let volumeProbe: VolumeProbing
     private let volumeRootDetector: VolumeRootDetecting
@@ -99,6 +101,8 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         portForwardingStore: PortForwardingPreferenceStore = PortForwardingPreferenceStore(),
         fullscreenPreferenceStore: FullscreenPreferenceStore = FullscreenPreferenceStore(),
         startupPreferenceStore: StartupPreferenceStore = StartupPreferenceStore(),
+        resourcePreferenceStore: VMResourcePreferenceStore = VMResourcePreferenceStore(),
+        resourceLimits: VMResourceLimits = .current,
         storageLocationStore: StorageLocationPreferenceStore = StorageLocationPreferenceStore(),
         volumeProbe: VolumeProbing = URLVolumeProbe(),
         volumeRootDetector: VolumeRootDetecting = FileManagerVolumeRootDetector(),
@@ -114,6 +118,8 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.portForwardingStore = portForwardingStore
         self.fullscreenPreferenceStore = fullscreenPreferenceStore
         self.startupPreferenceStore = startupPreferenceStore
+        self.resourcePreferenceStore = resourcePreferenceStore
+        self.resourceLimits = resourceLimits
         self.storageLocationStore = storageLocationStore
         self.volumeProbe = volumeProbe
         self.volumeRootDetector = volumeRootDetector
@@ -209,6 +215,14 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             },
             savePortForwarding: { [weak self] mappings in
                 self?.savePortForwarding(mappings)
+            },
+            resources: { [weak self, resourceLimits] in
+                guard let self else { return resourceLimits.defaults }
+                return self.resourceLimits.resolve(self.resourcePreferenceStore.load())
+            },
+            resourceLimits: resourceLimits,
+            saveResources: { [weak self] resources in
+                self?.resourcePreferenceStore.save(resources)
             },
             immersiveMode: { [weak self] in
                 self?.fullscreenPreferenceStore.load().isImmersive ?? true
@@ -439,7 +453,12 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             baseEnvironment: forwarding.environment,
             preferences: fullscreenPreferenceStore.load()
         )
-        var storageEnvironment = fullscreen.environment
+        let resources = VMResourceLaunchConfiguration.make(
+            baseEnvironment: fullscreen.environment,
+            preferences: resourcePreferenceStore.load(),
+            limits: resourceLimits
+        )
+        var storageEnvironment = resources.environment
         if let directory = disposableWorkspace.directory {
             storageEnvironment[StorageLocationPolicy.environmentKey] = directory.path
         }

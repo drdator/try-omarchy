@@ -62,6 +62,7 @@ if [[ ${1:-} == --bridge-native-audio && -n ${FAKE_AUDIO_BRIDGE_LIFETIME:-} ]]; 
   exit "${FAKE_AUDIO_BRIDGE_STATUS:-0}"
 fi
 if [[ ${1:-} == --bridge-native-audio \
+   || ${1:-} == --bridge-native-authentication \
    || ${1:-} == --bridge-native-clipboard \
    || ${1:-} == --bridge-native-camera ]]; then
   while kill -0 "$2" 2>/dev/null; do
@@ -80,6 +81,7 @@ cat >"$resources/runtime/bin/Try Omarchy" <<'SH'
 # OMARCHY_SDL_INPUT_DEVICE_NAME
 # OMARCHY_SDL_OUTPUT_DEVICE_NAME
 # guest_owner_uid guest_owner_gid
+# hv_vm_config_set_el2_enabled hv_gic_create
 case " $* " in
   *' -accel help '*) printf '%s\n' hvf ;;
   *' -machine help '*) printf '%s\n' 'virt                 ARM Virtual Machine' ;;
@@ -89,7 +91,7 @@ case " $* " in
     for device in \
       hda-micro intel-hda virtconsole virtserialport virtio-balloon-pci \
       virtio-9p-pci virtio-blk-pci virtio-gpu-gl-pci virtio-keyboard-pci \
-      virtio-net-pci virtio-rng-pci virtio-serial-pci virtio-tablet-pci; do
+      virtio-net-pci virtio-rng-pci virtio-serial-pci virtio-tablet-pci virtio-pinch-pci; do
       printf 'name "%s"\n' "$device"
     done
     ;;
@@ -104,6 +106,9 @@ case " $* " in
   *' -machine virt -netdev help '*) printf '%s\n' user ;;
   *' -machine virt -audiodev help '*) printf '%s\n' sdl ;;
   *' -device virtio-gpu-gl-pci,help '*) printf '%s\n' 'romfile=<str>' ;;
+  *' -machine virt,gic-version=3,virtualization=on '*' -qmp stdio '*)
+    exit "${FAKE_QEMU_NESTED_STATUS:-0}"
+    ;;
   *)
     exec /usr/bin/python3 - "$@" <<'PY'
 import os
@@ -172,6 +177,7 @@ QEMU_PERSISTENT_STORAGE_QEMU_ADD_FD='fd=9,set=77,opaque=omarchy-persistent-lock'
 QEMU_SELECTED_DISK=''
 QEMU_SELECTED_STORAGE_MODE=''
 QEMU_PERSISTENT_STORAGE_DIRECTORY=''
+QEMU_PERSISTENT_STORAGE_ROOT=''
 QEMU_PERSISTENT_STORAGE_IDENTITY=''
 QEMU_SELECTED_KERNEL=''
 QEMU_SELECTED_INITRAMFS=''
@@ -196,6 +202,7 @@ qemu_persistent_storage_select_existing() {
   printf 'reuse\n' >>"$FAKE_STORAGE_LOG"
   QEMU_SELECTED_STORAGE_MODE=persistent
   QEMU_PERSISTENT_STORAGE_DIRECTORY=$FAKE_PERSISTENT_ROOT
+  QEMU_PERSISTENT_STORAGE_ROOT=$FAKE_PERSISTENT_ROOT
   QEMU_PERSISTENT_STORAGE_IDENTITY=${FAKE_SAVED_IDENTITY:-saved-vm}
   if [[ -f $FAKE_PERSISTENT_ROOT/boot/kernel && \
         -f $FAKE_PERSISTENT_ROOT/boot/initramfs && \
@@ -231,6 +238,7 @@ qemu_persistent_storage_select() {
     chmod 600 "$QEMU_SELECTED_DISK"
     QEMU_SELECTED_STORAGE_MODE=ephemeral
     QEMU_PERSISTENT_STORAGE_DIRECTORY=''
+    QEMU_PERSISTENT_STORAGE_ROOT=''
     QEMU_PERSISTENT_STORAGE_IDENTITY=''
     QEMU_SELECTED_KERNEL=$8
     QEMU_SELECTED_INITRAMFS=$9
@@ -253,6 +261,7 @@ qemu_persistent_storage_select() {
   printf '%s\n' "${10}" >"$FAKE_PERSISTENT_ROOT/boot/command-line"
   QEMU_SELECTED_STORAGE_MODE=persistent
   QEMU_PERSISTENT_STORAGE_DIRECTORY=$FAKE_PERSISTENT_ROOT
+  QEMU_PERSISTENT_STORAGE_ROOT=$FAKE_PERSISTENT_ROOT
   QEMU_PERSISTENT_STORAGE_IDENTITY=${FAKE_SAVED_IDENTITY:-saved-vm}
   QEMU_SELECTED_KERNEL="$FAKE_PERSISTENT_ROOT/boot/kernel"
   QEMU_SELECTED_INITRAMFS="$FAKE_PERSISTENT_ROOT/boot/initramfs"
@@ -278,7 +287,11 @@ SH
 cat >"$shim_dir/sysctl" <<'SH'
 #!/bin/bash
 if [[ $# == 2 && $1 == -n && ($2 == hw.logicalcpu || $2 == hw.ncpu) ]]; then
-  printf '8\n'
+  printf '%s\n' "${FAKE_HOST_CPUS:-8}"
+  exit 0
+fi
+if [[ $# == 2 && $1 == -n && $2 == hw.memsize ]]; then
+  printf '%s\n' "${FAKE_HOST_MEMORY_BYTES:-51539607552}"
   exit 0
 fi
 exec /usr/sbin/sysctl "$@"
@@ -302,6 +315,100 @@ printf 'factory\n' >"$guest/rootfs.ext4"
 launcher="$resources/scripts/run-qemu-gpu.sh"
 persistent_root="$test_root/persistent"
 
+# Exercise the repo-local development path, where release-time launch.plist is
+# absent and the launcher validates build-spec.json directly.
+development_guest="$resources/development-guest"
+mkdir -p "$development_guest"
+/bin/cp "$macos_dir/../guest/spec.json" "$development_guest/build-spec.json"
+DEVELOPMENT_GUEST="$development_guest" /usr/bin/python3 <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+
+
+guest = Path(os.environ["DEVELOPMENT_GUEST"])
+spec = json.loads(guest.joinpath("build-spec.json").read_text())
+files = {
+    "LICENSE.omarchy": b"MIT\n",
+    "initramfs-linux.img": b"070701",
+    "packages.lock.txt": b"fixture\n",
+    "provenance.json": b"{}\n",
+    "rootfs.ext4.zst": b"\x28\xb5\x2f\xfd",
+}
+kernel = bytearray(60)
+kernel[56:60] = b"ARM\x64"
+files["vmlinuz-linux"] = bytes(kernel)
+for name, data in files.items():
+    guest.joinpath(name).write_bytes(data)
+
+metadata = {
+    "LICENSE.omarchy": ("guest-license", "text/plain"),
+    "build-spec.json": ("guest-metadata", "application/json"),
+    "initramfs-linux.img": ("guest-initramfs", "application/vnd.linux.initramfs"),
+    "packages.lock.txt": ("guest-metadata", "text/plain"),
+    "provenance.json": ("guest-metadata", "application/json"),
+    "rootfs.ext4": ("guest-rootfs", "application/vnd.omarchy.ext4"),
+    "rootfs.ext4.zst": ("guest-rootfs-compressed", "application/zstd"),
+    "vmlinuz-linux": ("guest-kernel", "application/vnd.linux.kernel"),
+}
+records = []
+checksums = {}
+for name, (role, media_type) in metadata.items():
+    if name == "rootfs.ext4":
+        size = spec["image"]["sizeMiB"] * 1024 * 1024
+        digest = "0" * 64
+    else:
+        data = guest.joinpath(name).read_bytes()
+        size = len(data)
+        digest = hashlib.sha256(data).hexdigest()
+    records.append(
+        {
+            "bytes": size,
+            "mediaType": media_type,
+            "path": name,
+            "role": role,
+            "sha256": digest,
+        }
+    )
+    checksums[name] = digest
+
+manifest = {
+    "artifacts": records,
+    "build": {},
+    "guest": {
+        "architecture": "aarch64",
+        "display": spec["guest"]["virtualDisplay"],
+        "distribution": "Arch Linux",
+        "kernelCommandLine": spec["runtime"]["kernelCommandLine"],
+        "profile": "factory",
+        "username": None,
+    },
+    "kind": "try-omarchy-guest-artifacts",
+    "normalizedUpstreamTree": {},
+    "schemaVersion": 1,
+    "upstream": {},
+}
+manifest_data = (json.dumps(manifest, separators=(",", ":")) + "\n").encode()
+guest.joinpath("guest-manifest.json").write_bytes(manifest_data)
+checksums["guest-manifest.json"] = hashlib.sha256(manifest_data).hexdigest()
+guest.joinpath("SHA256SUMS").write_text(
+    "".join(f"{checksums[name]}  {name}\n" for name in sorted(checksums)),
+    encoding="ascii",
+)
+PY
+
+development_stderr="$test_root/development-validation.stderr"
+if ! development_validation=$(env \
+  PATH="$shim_dir:/usr/bin:/bin:/usr/sbin:/sbin" \
+  OMARCHY_QEMU_GPU_INSPECT_ONLY=1 \
+  "$launcher" "$development_guest" 2>"$development_stderr"); then
+  /bin/cat "$development_stderr" >&2 || true
+  fail 'generated build spec failed repo-local development validation'
+fi
+assert_contains "$development_validation" \
+  'root=/dev/vda rw rootwait console=tty0 console=hvc0'
+
 run_scenario() {
   local scenario=$1
   local expected_status=$2
@@ -312,6 +419,7 @@ run_scenario() {
   mkdir -p "$scenario_dir"
   : >"$scenario_dir/storage.log"
   if env \
+    -u OMARCHY_QEMU_GPU_CPUS -u OMARCHY_QEMU_GPU_MEMORY_MIB \
     PATH="$shim_dir:/usr/bin:/bin:/usr/sbin:/sbin" \
     FAKE_STORAGE_LOG="$scenario_dir/storage.log" \
     FAKE_PERSISTENT_ROOT="$persistent_root" \
@@ -337,17 +445,73 @@ assert_line_pair "$test_root/disabled/qemu.log" -fsdev \
   "local,id=omarchy-settings,path=$resources/guest-settings,security_model=none,readonly=on"
 assert_not_contains "$disabled_qemu" 'systemd.unit='
 assert_line_pair "$test_root/disabled/qemu.log" -machine \
-  'virt,accel=hvf,gic-version=3'
+  'virt,gic-version=3,virtualization=on'
+assert_line_pair "$test_root/disabled/qemu.log" -accel 'hvf,kernel-irqchip=on'
 assert_not_contains "$disabled_qemu" gic-version=2
 assert_line_pair "$test_root/disabled/qemu.log" -netdev 'user,id=omarchy-net'
+assert_line_pair "$test_root/disabled/qemu.log" -chardev \
+  "stdio,id=omarchy-hvc0,signal=off,logfile=$persistent_root/console.log,logappend=off"
 assert_line_pair "$test_root/disabled/qemu.log" -kernel "$persistent_root/boot/kernel"
 assert_line_pair "$test_root/disabled/qemu.log" -initrd "$persistent_root/boot/initramfs"
 assert_not_contains "$disabled_qemu" hostfwd
 assert_not_contains "$disabled_qemu" tryomarchy.ssh_access
 assert_contains "$disabled_qemu" \
   'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=on,swap-opt-cmd=off'
+assert_contains "$disabled_qemu" \
+  'socket,id=omarchy-authentication-bridge,path='
+assert_contains "$disabled_qemu" \
+  'virtserialport,bus=omarchy-serial.0,nr=3,chardev=omarchy-authentication-bridge,name=dev.tryomarchy.authentication'
+assert_contains "$disabled_qemu" \
+  'virtserialport,bus=omarchy-serial.0,nr=5,chardev=omarchy-settings-bridge,name=dev.tryomarchy.settings'
 assert_contains "$(<"$test_root/disabled/storage.log")" select-existing
 assert_contains "$(<"$test_root/disabled/storage.log")" create
+assert_line_pair "$test_root/disabled/qemu.log" -smp '8,sockets=1,cores=8,threads=1'
+assert_line_pair "$test_root/disabled/qemu.log" -m 4096M
+
+# Exercise resource values through the real launcher and its QEMU boundary.
+run_scenario resources 0 '' FAKE_HOST_CPUS=18 \
+  OMARCHY_QEMU_GPU_CPUS=18 OMARCHY_QEMU_GPU_MEMORY_MIB=12288
+assert_line_pair "$test_root/resources/qemu.log" -smp '18,sockets=1,cores=18,threads=1'
+assert_line_pair "$test_root/resources/qemu.log" -m 12288M
+assert_contains "$(<"$test_root/resources/stderr")" '18 vCPUs and 12 GiB RAM'
+
+run_scenario resource-minimum 0 '' OMARCHY_QEMU_GPU_CPUS=4 OMARCHY_QEMU_GPU_MEMORY_MIB=2048
+assert_line_pair "$test_root/resource-minimum/qemu.log" -smp '4,sockets=1,cores=4,threads=1'
+assert_line_pair "$test_root/resource-minimum/qemu.log" -m 2048M
+run_scenario resource-maximum-memory 0 '' OMARCHY_QEMU_GPU_MEMORY_MIB=45056
+assert_line_pair "$test_root/resource-maximum-memory/qemu.log" -m 45056M
+run_scenario smaller-host-defaults 0 '' FAKE_HOST_CPUS=6 FAKE_HOST_MEMORY_BYTES=7516192768
+assert_line_pair "$test_root/smaller-host-defaults/qemu.log" -smp '6,sockets=1,cores=6,threads=1'
+assert_line_pair "$test_root/smaller-host-defaults/qemu.log" -m 4096M
+
+run_scenario too-many-cpus 1 '' OMARCHY_QEMU_GPU_CPUS=9
+assert_contains "$(<"$test_root/too-many-cpus/stderr")" 'must be between 4 and 8'
+[[ ! -s $test_root/too-many-cpus/storage.log ]] || fail 'invalid CPU count touched storage'
+run_scenario too-much-memory 1 '' OMARCHY_QEMU_GPU_MEMORY_MIB=46080
+assert_contains "$(<"$test_root/too-much-memory/stderr")" 'must leave the host at least 4096 MiB'
+[[ ! -s $test_root/too-much-memory/storage.log ]] || fail 'invalid memory touched storage'
+run_scenario insufficient-host-cpus 1 '' FAKE_HOST_CPUS=2
+assert_contains "$(<"$test_root/insufficient-host-cpus/stderr")" 'at least four host CPUs'
+run_scenario host-memory-reserve 1 '' FAKE_HOST_MEMORY_BYTES=8589934592 OMARCHY_QEMU_GPU_MEMORY_MIB=5120
+assert_contains "$(<"$test_root/host-memory-reserve/stderr")" 'must leave the host at least 4096 MiB'
+
+invalid_index=0
+for invalid_resource in '' 0 -1 1.5 abc 08 1+2 18446744073709551620; do
+  invalid_index=$((invalid_index + 1))
+  for resource_key in OMARCHY_QEMU_GPU_CPUS; do
+    scenario="invalid-resource-$resource_key-$invalid_index"
+    run_scenario "$scenario" 1 '' "$resource_key=$invalid_resource"
+    [[ ! -s $test_root/$scenario/storage.log ]] || fail 'malformed resource value touched storage'
+    [[ ! -e $test_root/$scenario/qemu.log ]] || fail 'malformed resource value started QEMU'
+  done
+done
+
+run_scenario nested-fallback 0 '' FAKE_QEMU_NESTED_STATUS=1
+nested_fallback_qemu=$(<"$test_root/nested-fallback/qemu.log")
+assert_line_pair "$test_root/nested-fallback/qemu.log" -machine \
+  'virt,accel=hvf,gic-version=3'
+assert_not_contains "$nested_fallback_qemu" virtualization=on
+assert_not_contains "$nested_fallback_qemu" kernel-irqchip=on
 
 # A clean guest shutdown may close the bridge before QEMU exits.
 run_scenario audio-shutdown 0 '' FAKE_AUDIO_BRIDGE_LIFETIME=0.08 FAKE_QEMU_LIFETIME=0.45
@@ -369,7 +533,12 @@ printf 'new-initramfs\n' >"$guest/initramfs-linux.img"
 /usr/bin/plutil -replace kernelCommandLine -string \
   'root=/dev/vda rw rootwait console=tty0 console=hvc0 loglevel=5 systemd.show_status=false rd.systemd.show_status=false mitigations=off nowatchdog' \
   "$guest/launch.plist"
+printf 'previous boot console\n' >"$persistent_root/console.log"
 run_scenario enabled 0 '' OMARCHY_QEMU_GPU_PORT_FORWARDS=tcp:2223:22
+[[ -f $persistent_root/console.log.1 ]] || \
+  fail 'expected the previous console log to be rotated to console.log.1'
+[[ $(<"$persistent_root/console.log.1") == 'previous boot console' ]] || \
+  fail 'console.log.1 did not retain the previous boot output'
 enabled_qemu=$(<"$test_root/enabled/qemu.log")
 assert_line_pair "$test_root/enabled/qemu.log" -netdev \
   'user,id=omarchy-net,hostfwd=tcp:127.0.0.1:2223-:22'
@@ -499,7 +668,10 @@ assert_contains "$mixed_qemu" 'hostfwd=udp:127.0.0.1:2222-:22'
 [[ $(grep -o 'tryomarchy.ssh_access=1' "$test_root/mixed/qemu.log" | wc -l | tr -d ' ') == 1 ]] || \
   fail 'mixed forwarding must append exactly one SSH activation token'
 
-run_scenario ephemeral 0 --ephemeral OMARCHY_QEMU_GPU_PORT_FORWARDS=tcp:2224:22
+run_scenario ephemeral 0 --ephemeral OMARCHY_QEMU_GPU_PORT_FORWARDS=tcp:2224:22 \
+  FAKE_HOST_CPUS=18 OMARCHY_QEMU_GPU_CPUS=18 OMARCHY_QEMU_GPU_MEMORY_MIB=12288
+assert_line_pair "$test_root/ephemeral/qemu.log" -smp '18,sockets=1,cores=18,threads=1'
+assert_line_pair "$test_root/ephemeral/qemu.log" -m 12288M
 assert_contains "$(<"$test_root/ephemeral/qemu.log")" \
   'user,id=omarchy-net,hostfwd=tcp:127.0.0.1:2224-:22'
 assert_contains "$(<"$test_root/ephemeral/qemu.log")" tryomarchy.ssh_access=1
