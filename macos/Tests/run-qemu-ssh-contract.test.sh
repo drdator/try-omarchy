@@ -50,9 +50,17 @@ mkdir -p \
 chmod 755 "$resources/scripts/run-qemu-gpu.sh"
 chmod 644 "$resources/scripts/qemu-port-forwarding.sh"
 
+mkdir -p "$resources/guest-settings"
+cp "$macos_dir/guest-settings.service" "$resources/guest-settings/guest-settings.service"
+cp "$macos_dir/../guest/scripts/install-settings-integration.py" "$resources/guest-settings/install.py"
+
 cat >"$contents/MacOS/omarchy-vm-helper" <<'SH'
 #!/bin/bash
 set -euo pipefail
+if [[ ${1:-} == --bridge-native-audio && -n ${FAKE_AUDIO_BRIDGE_LIFETIME:-} ]]; then
+  sleep "$FAKE_AUDIO_BRIDGE_LIFETIME"
+  exit "${FAKE_AUDIO_BRIDGE_STATUS:-0}"
+fi
 if [[ ${1:-} == --bridge-native-audio \
    || ${1:-} == --bridge-native-clipboard \
    || ${1:-} == --bridge-native-camera ]]; then
@@ -323,6 +331,11 @@ run_scenario() {
 
 run_scenario disabled 0 ''
 disabled_qemu=$(<"$test_root/disabled/qemu.log")
+assert_contains "$disabled_qemu" 'systemd.wants=try-omarchy-settings.service'
+assert_contains "$disabled_qemu" "systemd.set_credential_binary=systemd.extra-unit.try-omarchy-settings.service:$(base64 < "$macos_dir/guest-settings.service" | tr -d '\r\n')"
+assert_line_pair "$test_root/disabled/qemu.log" -fsdev \
+  "local,id=omarchy-settings,path=$resources/guest-settings,security_model=none,readonly=on"
+assert_not_contains "$disabled_qemu" 'systemd.unit='
 assert_line_pair "$test_root/disabled/qemu.log" -machine \
   'virt,accel=hvf,gic-version=3'
 assert_not_contains "$disabled_qemu" gic-version=2
@@ -335,6 +348,11 @@ assert_contains "$disabled_qemu" \
   'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=on,swap-opt-cmd=off'
 assert_contains "$(<"$test_root/disabled/storage.log")" select-existing
 assert_contains "$(<"$test_root/disabled/storage.log")" create
+
+# A clean guest shutdown may close the bridge before QEMU exits.
+run_scenario audio-shutdown 0 '' FAKE_AUDIO_BRIDGE_LIFETIME=0.08 FAKE_QEMU_LIFETIME=0.45
+run_scenario audio-failure 1 '' FAKE_AUDIO_BRIDGE_LIFETIME=0.08 FAKE_AUDIO_BRIDGE_STATUS=7 FAKE_QEMU_LIFETIME=10
+assert_contains "$(<"$test_root/audio-failure/stderr")" 'native audio bridge exited while QEMU was running (status 7)'
 
 run_scenario non-immersive 0 '' OMARCHY_QEMU_GPU_IMMERSIVE=0
 non_immersive_qemu=$(<"$test_root/non-immersive/qemu.log")

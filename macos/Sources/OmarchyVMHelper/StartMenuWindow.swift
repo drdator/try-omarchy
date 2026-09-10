@@ -220,7 +220,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private var launchInProgress = false
     private var virtualMachineRunning = false
     private var closeRunningSettings: (() -> Void)?
-    private var prelaunchControlsLocked: Bool { launchInProgress || virtualMachineRunning }
+    private var shutdownInProgress = false
+    private var requestSettingsAction: ((VMRunLifecycle.SettingsAction) -> Void)?
+    private var controlsBusy: Bool { launchInProgress || shutdownInProgress }
+    private var prelaunchControlsLocked: Bool { controlsBusy || virtualMachineRunning }
     private var pendingResetSpaceEstimate: String?
     private var resetConfirmationPrompt: ResetConfirmationPrompt?
     private weak var startMenuScrollView: NSScrollView?
@@ -230,7 +233,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         canRestore: { [weak self] in
             guard let self else { return false }
             return self.window.isVisible
-                && !self.prelaunchControlsLocked
+                && !self.controlsBusy
                 && !self.resetInProgress
                 && !self.microphoneRequestInFlight
                 && !self.cameraRequestInFlight
@@ -331,14 +334,52 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         window.contentView = content
     }
 
-    func virtualMachineDidStart(closeSettings: @escaping () -> Void) {
+    func virtualMachineDidStart(
+        requestSettingsAction: @escaping (VMRunLifecycle.SettingsAction) -> Void = { _ in },
+        closeSettings: @escaping () -> Void
+    ) {
         launchInProgress = false
         virtualMachineRunning = true
         closeRunningSettings = closeSettings
+        self.requestSettingsAction = requestSettingsAction
         window.title = "Try Omarchy Settings"
         // The VM has its own Cocoa process and may occupy a fullscreen Space.
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.level = .floating
+    }
+
+    func shutdownDidBegin() {
+        shutdownInProgress = true
+        render()
+    }
+
+    func shutdownDidFail(_ message: String) {
+        shutdownInProgress = false
+        render()
+        let alert = NSAlert()
+        alert.messageText = "Omarchy couldn’t shut down"
+        alert.informativeText = message
+        alert.beginSheetModal(for: window)
+    }
+
+    @objc private func restartOmarchy() { requestShutdown(.restart) }
+    @objc private func shutDownToManage() { requestShutdown(.manage) }
+
+    private func requestShutdown(_ action: VMRunLifecycle.SettingsAction) {
+        guard virtualMachineRunning, !controlsBusy,
+              !microphoneRequestInFlight, !cameraRequestInFlight,
+              window.attachedSheet == nil, portForwardingEditor == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = action == .restart ? "Restart Try Omarchy?" : "Shut down Omarchy to manage this VM?"
+        alert.informativeText = action == .restart
+            ? "Save your work first. Omarchy will shut down and start again with your saved settings."
+            : "Save your work first. The settings window will stay open so you can change the VM location or reset it."
+        alert.addButton(withTitle: action == .restart ? "Restart" : "Shut Down")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.requestSettingsAction?(action)
+        }
     }
 
     @objc private func closeSettings() {
@@ -369,7 +410,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     func refreshPermissionStatus() {
-        guard window.isVisible, !prelaunchControlsLocked, !resetInProgress else { return }
+        guard window.isVisible, !controlsBusy, !resetInProgress else { return }
         render()
     }
 
@@ -635,7 +676,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 granted: !storageStatus.isDefault && storageStatus.problem == nil,
                 statusLabels: ("\u{25cf}  Custom", "\u{25cb}  Default"),
                 actions: storageActions,
-                actionsEnabled: canResetStorage && !storageStatus.isEnvironmentOverride,
+                actionsEnabled: canResetStorage && !virtualMachineRunning && !storageStatus.isEnvironmentOverride,
                 minimumHeight: storageDetailLines != nil || storageActions.count > 1 ? 90 : 68
             )
         }
@@ -689,7 +730,11 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             ? "Erase this VM and return it to factory settings"
             : "Reset is unavailable for a disposable VM"
 
-        let resetViews: [NSView] = [reset]
+        let manage = NSButton(title: "Shut down to manage…", target: self, action: #selector(shutDownToManage))
+        manage.bezelStyle = .rounded
+        manage.identifier = NSUserInterfaceItemIdentifier("manage-vm-button")
+        manage.isEnabled = !controlsBusy
+        let resetViews: [NSView] = virtualMachineRunning && canResetStorage ? [manage] : [reset]
         let resetSection = NSStackView(views: resetViews)
         resetSection.orientation = .vertical
         resetSection.alignment = .leading
@@ -750,15 +795,29 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             action: #selector(changeStartAutomatically(_:))
         )
         automaticStart.state = startAutomatically() ? .on : .off
-        automaticStart.isEnabled = launchButton.isEnabled
+        automaticStart.isEnabled = !controlsBusy && !resetInProgress
         automaticStart.identifier = NSUserInterfaceItemIdentifier("automatic-start-checkbox")
         let automaticStartHelp = virtualMachineRunning
-            ? "Skip the start menu when opening Try Omarchy. To change the other settings, shut down Omarchy and hold Option while reopening the Mac app."
+            ? "Open these settings anytime from Omarchy’s Setup menu or by searching for Try Omarchy Settings."
             : "Skip this menu on launch. Hold Option while opening the app to show it again."
         automaticStart.setAccessibilityHelp(automaticStartHelp)
         let automaticStartCaption = NSTextField(wrappingLabelWithString: automaticStartHelp)
         automaticStartCaption.font = .systemFont(ofSize: 12)
         automaticStartCaption.textColor = .secondaryLabelColor
+        let restart = NSButton(title: "Restart Try Omarchy…", target: self, action: #selector(restartOmarchy))
+        restart.bezelStyle = .rounded
+        restart.identifier = NSUserInterfaceItemIdentifier("restart-vm-button")
+        restart.isEnabled = !controlsBusy
+        let restartCaption = NSTextField(wrappingLabelWithString: shutdownInProgress
+            ? "Waiting for Omarchy to shut down. Finish saving your work inside Omarchy."
+            : "Shared folder, port forwarding, and immersive mode changes apply when Try Omarchy next starts. Restart to apply them now.")
+        restartCaption.font = .systemFont(ofSize: 12)
+        restartCaption.textColor = .secondaryLabelColor
+        let runningActions = NSStackView(views: [restartCaption, restart])
+        runningActions.orientation = .vertical
+        runningActions.alignment = .leading
+        runningActions.spacing = 6
+        runningActions.identifier = NSUserInterfaceItemIdentifier("running-settings-actions")
         let automaticStartSection = NSStackView(views: [automaticStart, automaticStartCaption])
         automaticStartSection.orientation = .vertical
         automaticStartSection.alignment = .leading
@@ -795,7 +854,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
         let stack = NSStackView(
             views: virtualMachineRunning
-                ? [headingStack, automaticStartSection, launchButton, permissionCard, resetSection, footerContainer]
+                ? [headingStack, automaticStartSection, launchButton, runningActions, permissionCard, resetSection, footerContainer]
                 : [headingStack, permissionCard, resetSection, automaticStartSection, launchButton, footerContainer]
         )
         stack.orientation = .vertical
@@ -985,7 +1044,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             button.isEnabled = actionsEnabled
                 && !microphoneRequestInFlight
                 && !cameraRequestInFlight
-                && !prelaunchControlsLocked
+                && !controlsBusy
                 && !resetInProgress
             let identifier = actions.count == 1
                 ? "permission-action-\(symbolName)"
@@ -1115,7 +1174,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         toggle.state = isEnabled ? .on : .off
         toggle.target = self
         toggle.action = #selector(changeImmersiveMode(_:))
-        toggle.isEnabled = !microphoneRequestInFlight && !prelaunchControlsLocked && !resetInProgress
+        toggle.isEnabled = !microphoneRequestInFlight && !controlsBusy && !resetInProgress
         toggle.identifier = NSUserInterfaceItemIdentifier("immersive-toggle")
         toggle.setAccessibilityLabel("Immersive mode")
         toggle.setAccessibilityTitleUIElement(title)
@@ -1309,7 +1368,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func beginSharedFolderSelection() {
-        guard !prelaunchControlsLocked,
+        guard !controlsBusy,
               !resetInProgress,
               !microphoneRequestInFlight,
               !cameraRequestInFlight else { return }
@@ -1341,17 +1400,19 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func enableSharedFolder() {
+        guard !controlsBusy, !resetInProgress else { return }
         setSharedFolderEnabled(true)
         render()
     }
 
     @objc private func disableSharedFolder() {
+        guard !controlsBusy, !resetInProgress else { return }
         setSharedFolderEnabled(false)
         render()
     }
 
     @objc private func beginPortForwardingConfiguration() {
-        guard !prelaunchControlsLocked, !resetInProgress, portForwardingEditor == nil else { return }
+        guard !controlsBusy, !resetInProgress, portForwardingEditor == nil else { return }
         permissionWindowRestorer.cancel()
         let editor = PortForwardingEditor(
             mappings: portForwardingStatus(),
@@ -1372,7 +1433,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func changeImmersiveMode(_ sender: NSSwitch) {
-        guard !prelaunchControlsLocked, !resetInProgress else { return }
+        guard !controlsBusy, !resetInProgress else { return }
         let isEnabled = sender.state == .on
         setImmersiveMode(isEnabled)
         let detailText = StartMenuPresentation.immersiveDetail(isEnabled: isEnabled)
@@ -1435,7 +1496,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func changeStartAutomatically(_ sender: NSButton) {
-        guard !launchInProgress, !resetInProgress else { return }
+        guard !controlsBusy, !resetInProgress else { return }
         setStartAutomatically(sender.state == .on)
     }
 
