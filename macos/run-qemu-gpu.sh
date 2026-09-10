@@ -1469,6 +1469,16 @@ case ${OMARCHY_QEMU_GPU_IMMERSIVE:-1} in
   *) fail "OMARCHY_QEMU_GPU_IMMERSIVE must be 0 or 1" ;;
 esac
 
+# systemd's boot credential creates one temporary service without replacing
+# the guest's default target or requiring an agent to already be installed.
+settings_payload="$resources_dir/guest-settings"
+[[ -f $settings_payload/guest-settings.service && -f $settings_payload/install.py ]] || \
+  fail "the bundled settings integration is missing"
+settings_unit=$(base64 < "$settings_payload/guest-settings.service" | tr -d '\r\n')
+settings_kernel_argument=" systemd.set_credential_binary=systemd.extra-unit.try-omarchy-settings.service:$settings_unit systemd.wants=try-omarchy-settings.service"
+# QEMU escapes commas in key-value option values by doubling them.
+settings_payload_escaped=${settings_payload//,/,,}
+
 # macOS 15 can pass the paused EL2 probe, then abort with HV_BAD_ARGUMENT when
 # QEMU synchronizes vCPU registers (#211). Keep it on the platform-GIC/EL1 path.
 # On macOS 26+, probe actual Hypervisor.framework support for EL2 rather than
@@ -1542,7 +1552,7 @@ qemu_args=(
   -qmp "unix:$qmp_socket,server=on,wait=off"
   -kernel "$launch_kernel"
   -initrd "$launch_initramfs"
-  -append "$launch_kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument$ssh_kernel_argument"
+  -append "$launch_kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument$ssh_kernel_argument$settings_kernel_argument"
   -drive "if=none,id=omarchy-root,file=$working_disk,format=raw,media=disk,cache=writeback"
   -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
   -device "$gpu_device"
@@ -1558,6 +1568,8 @@ qemu_args=(
   -object 'rng-random,id=omarchy-rng,filename=/dev/urandom'
   -device 'virtio-rng-pci,rng=omarchy-rng'
   -device virtio-balloon-pci
+  -fsdev "local,id=omarchy-settings,path=$settings_payload_escaped,security_model=none,readonly=on"
+  -device 'virtio-9p-pci,fsdev=omarchy-settings,mount_tag=try-omarchy-settings,romfile='
   -device 'virtio-serial-pci,id=omarchy-serial'
   -chardev "socket,id=omarchy-settings-bridge,path=$settings_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=5,chardev=omarchy-settings-bridge,name=dev.tryomarchy.settings'
@@ -1688,9 +1700,14 @@ camera_bridge_restarts=0
 
 # Bash 3.2 has no `wait -n`. The native-audio bridge is required for the guest
 # transport, so watch it alongside QEMU and fail if it exits unexpectedly.
+qemu_is_running() {
+  local state
+  state=$(ps -p "$qemu_pid" -o state= 2>/dev/null || true)
+  [[ -n $state && $state != *Z* ]]
+}
+
 while true; do
-  qemu_state=$(ps -p "$qemu_pid" -o state= 2>/dev/null || true)
-  [[ -n $qemu_state && $qemu_state != *Z* ]] || break
+  qemu_is_running || break
 
   if [[ $QEMU_NETWORK_MODE == bridged && -f $QEMU_NETWORK_DIRECTORY/failed ]]; then
     cat "$QEMU_NETWORK_DIRECTORY/log" >&2
@@ -1707,12 +1724,14 @@ while true; do
       audio_bridge_status=$?
     fi
     audio_bridge_pid=""
-    for ((attempt = 0; attempt < 20; attempt++)); do
-      qemu_state=$(ps -p "$qemu_pid" -o state= 2>/dev/null || true)
-      [[ -n $qemu_state && $qemu_state != *Z* ]] || break
+    # QEMU closes its channels before its process finishes exiting. Give that
+    # teardown a short grace period, then use QEMU's real exit status below.
+    # A bridge failure while QEMU stays alive must still fail the launch.
+    for ((attempt = 0; attempt < 40; attempt++)); do
+      qemu_is_running || break
       sleep 0.05
     done
-    [[ -n $qemu_state && $qemu_state != *Z* ]] || break
+    qemu_is_running || break
     fail "native audio bridge exited while QEMU was running (status $audio_bridge_status)"
   fi
 
@@ -1731,6 +1750,7 @@ while true; do
         clipboard_bridge_restarts=$((clipboard_bridge_restarts + 1))
         echo "[qemu-gpu] clipboard bridge exited (status $clipboard_bridge_status); restarting ($clipboard_bridge_restarts/5)" >&2
         sleep 1
+        qemu_is_running || break
         start_clipboard_bridge
       else
         echo "[qemu-gpu] clipboard sharing is unavailable for the rest of this session" >&2
@@ -1773,6 +1793,7 @@ while true; do
         camera_bridge_restarts=$((camera_bridge_restarts + 1))
         echo "[qemu-gpu] camera bridge exited (status $camera_bridge_status); restarting ($camera_bridge_restarts/5)" >&2
         sleep 1
+        qemu_is_running || break
         start_camera_bridge
       else
         echo "[qemu-gpu] camera sharing is unavailable for the rest of this session" >&2

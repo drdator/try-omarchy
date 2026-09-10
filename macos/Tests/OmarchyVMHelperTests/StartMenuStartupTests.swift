@@ -61,9 +61,18 @@ struct StartMenuStartupTests {
         #expect(checkbox.isEnabled)
         checkbox.performClick(nil)
         #expect(!automaticStart)
-        for identifier in ["permission-action-folder", "permission-action-network"] {
+        for identifier in ["permission-action-folder", "permission-action-network", "permission-action-cpu"] {
             let button = try #require(descendant(withIdentifier: identifier, in: content) as? NSButton)
-            #expect(!button.isEnabled)
+            #expect(button.isEnabled)
+        }
+        let immersive = try #require(descendant(withIdentifier: "immersive-toggle", in: content) as? NSButton)
+        #expect(immersive.isEnabled)
+        for identifier in ["restart-vm-button", "manage-vm-button"] {
+            #expect(try #require(descendant(withIdentifier: identifier, in: content) as? NSButton).isEnabled)
+        }
+        menu.shutdownDidBegin()
+        for identifier in ["automatic-start-checkbox", "permission-action-folder", "permission-action-network", "permission-action-cpu", "restart-vm-button", "manage-vm-button"] {
+            #expect(!(try #require(descendant(withIdentifier: identifier, in: content) as? NSButton)).isEnabled)
         }
         menu.launchOmarchy()
         #expect(launchCount == 1)
