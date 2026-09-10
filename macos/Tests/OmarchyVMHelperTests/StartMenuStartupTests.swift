@@ -38,6 +38,44 @@ struct StartMenuStartupTests {
         #expect(!launchingCheckbox.isEnabled)
     }
 
+    @Test("Running settings can change startup and close without launching or quitting the VM")
+    func runningSettings() throws {
+        _ = NSApplication.shared
+        var automaticStart = true
+        var launchCount = 0
+        var closeCount = 0
+        let menu = makeMenu(
+            storageState: { .defaultLocation },
+            startAutomatically: { automaticStart },
+            setStartAutomatically: { automaticStart = $0 },
+            launch: { launchCount += 1 }
+        )
+        defer { menu.dismiss() }
+        menu.launchOmarchy()
+        menu.virtualMachineDidStart { closeCount += 1 }
+        menu.prepareForPresentation(visibleFrame: nil)
+        let content = try #require(menu.window.contentView)
+        let checkbox = try #require(descendant(
+            withIdentifier: "automatic-start-checkbox", in: content
+        ) as? NSButton)
+        #expect(checkbox.isEnabled)
+        checkbox.performClick(nil)
+        #expect(!automaticStart)
+        for identifier in ["permission-action-folder", "permission-action-network"] {
+            let button = try #require(descendant(withIdentifier: identifier, in: content) as? NSButton)
+            #expect(!button.isEnabled)
+        }
+        menu.launchOmarchy()
+        #expect(launchCount == 1)
+        let done = try #require(descendant(withIdentifier: "launch-button", in: content) as? NSButton)
+        #expect(done.isEnabled)
+        done.performClick(nil)
+        #expect(closeCount == 1)
+        #expect(menu.windowShouldClose(menu.window) == false)
+        #expect(closeCount == 2)
+        #expect(launchCount == 1)
+    }
+
     private func makeMenu(
         storageState: @escaping () -> StorageLocationMenuState,
         startAutomatically: @escaping () -> Bool = { false },
