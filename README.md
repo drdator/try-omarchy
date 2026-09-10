@@ -145,6 +145,8 @@ By default, every launch begins at the start menu. Enable **Start automatically*
 
 While that menu is open, Try Omarchy behaves like a regular Mac app with standard Quit, Close Window, and Minimize commands; after the VM starts, that native app chrome steps aside for Omarchy. **Immersive** is on by default, so Omarchy opens Full Screen with the Mac menu bar and Dock hidden. Turn it off to open a resizable window; if you later enter Full Screen, the Mac menu bar and Dock remain available at the screen edges. Whenever the Omarchy window is focused, Command belongs to the guest as Super in either mode; Accessibility permission lets system shortcuts such as Command-Space reach it before macOS. Microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
 
+Inside Omarchy, choose **Setup → Try Omarchy Settings**, search for **Try Omarchy Settings**, or run `omarchy-native-settings` to reopen the Mac settings window. This first version lets you change **Start automatically** while the VM runs; the other controls are disabled. **Done** or closing the window returns to Omarchy without stopping the VM. To change other settings, shut down Omarchy and hold **Option** while reopening the Mac app. Existing VMs need the [guest settings command installed once](guest/README.md#settings-access-from-an-existing-vm).
+
 Restarting from inside Omarchy reboots the guest in the same Try Omarchy app.
 Shutting down Omarchy closes the app and leaves it closed.
 

@@ -61,6 +61,8 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let deviceProvider: HostAudioDeviceProviding
     private let bundledMetrics: BundledGuestMetrics?
     private var startMenuWindow: StartMenuWindow?
+    private var settingsBridge: NativeSettingsBridge?
+    private var settingsReturnApplication: NSRunningApplication?
     private var volumeObserver: NSObjectProtocol?
     private var hostPowerObserver: HostPowerNotificationObserver?
     private let hostSleepCoordinator = VMHostSleepCoordinator()
@@ -498,7 +500,34 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         virtualMachineReachedStart = true
         NSApp.setActivationPolicy(ApplicationPresentation.runningActivationPolicy)
         startMenuWindow?.dismiss()
-        startMenuWindow = nil
+        startMenuWindow?.virtualMachineDidStart { [weak self] in
+            self?.closeRunningSettings()
+        }
+        let settingsSocket = URL(fileURLWithPath: qmpSocketPath)
+            .deletingLastPathComponent().appendingPathComponent("settings.sock").path
+        do {
+            settingsBridge = try NativeSettingsBridge(socketPath: settingsSocket) { [weak self] in
+                self?.showRunningSettings() ?? false
+            }
+        } catch {
+            // Settings access is optional; losing it must not stop a running VM.
+            fputs("[settings] \(error.localizedDescription)\n", stderr)
+        }
+    }
+
+    private func showRunningSettings() -> Bool {
+        guard childRunning, virtualMachineReachedStart, !lifecycle.isStopping,
+              !isPresentingBlockingAlert, let startMenuWindow else { return false }
+        guard !startMenuWindow.window.isVisible else { return true }
+        settingsReturnApplication = NSWorkspace.shared.frontmostApplication
+        startMenuWindow.show()
+        return true
+    }
+
+    private func closeRunningSettings() {
+        startMenuWindow?.dismiss()
+        settingsReturnApplication?.activate(options: [])
+        settingsReturnApplication = nil
     }
 
     private func failHostSleepControlSetup(detail: String) {
@@ -819,6 +848,13 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private func childDidExit(status: Int32) {
         guard childRunning else { return }
         childRunning = false
+        settingsBridge?.stop()
+        settingsBridge = nil
+        settingsReturnApplication = nil
+        if virtualMachineReachedStart {
+            startMenuWindow?.dismiss()
+            startMenuWindow = nil
+        }
         let launchAllowedBootRecovery = activeLaunchAllowedBootRecovery
         activeLaunchAllowedBootRecovery = false
         cancelHostWakeRetry()

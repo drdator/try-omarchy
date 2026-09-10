@@ -81,3 +81,39 @@ The vendor service generates missing host keys on the writable guest disk. A
 persistent VM therefore keeps its identity across restarts and app updates,
 while a Factory Reset or a fresh ephemeral VM gets a new identity. The factory
 image must never contain shared SSH host private keys.
+
+## Settings access from an existing VM
+
+New factory images include **Setup → Try Omarchy Settings** and a searchable
+application entry. Both run `omarchy-native-settings`, which sends
+`open-settings\n` through `/dev/virtio-ports/dev.tryomarchy.settings`. The Mac
+app replies `opened\n` after presenting its window, or `unavailable\n` if it
+cannot present settings. The command times out after three seconds and reports
+errors through a desktop notification and stderr. The channel only opens the
+settings UI; it does not accept preference values or other host commands.
+
+Updating the Mac app does not install these files on an existing persistent
+disk. For this prototype, make this repository available inside the guest
+(for example through a shared folder), then run these commands **inside
+Omarchy**, from the repository root:
+
+```sh
+sudo install -m 0755 guest/native-overlay/usr/local/bin/omarchy-native-settings /usr/local/bin/omarchy-native-settings
+sudo install -m 0644 guest/native-overlay/etc/udev/rules.d/92-omarchy-native-settings.rules /etc/udev/rules.d/92-omarchy-native-settings.rules
+sudo install -m 0644 guest/native-overlay/usr/share/applications/try-omarchy-settings.desktop /usr/share/applications/try-omarchy-settings.desktop
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=virtio-ports
+```
+
+The VM must have been launched with the updated Mac app, which adds the
+settings port. Run `omarchy-native-settings` or search the application launcher
+for **Try Omarchy Settings**. For the Setup menu entry, merge the
+`setup.try-omarchy` entry from
+`guest/native-overlay/etc/skel/.config/omarchy/extensions/omarchy-menu.jsonc`
+into `~/.config/omarchy/extensions/omarchy-menu.jsonc`, preserving any existing
+entries, then run `omarchy menu refresh`.
+
+Only automatic startup is editable while the VM runs in this prototype. The
+remaining settings still require shutting down and reopening the Mac app with
+Option held. A guest reboot keeps the current QEMU process and does not reload
+the Mac launch preferences.
