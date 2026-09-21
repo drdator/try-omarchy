@@ -306,7 +306,17 @@ Loopback binding prevents devices on Wi-Fi, Ethernet, or the wider LAN from
 connecting. It does not isolate the listener from other users or processes on
 the same Mac; guest SSH authentication is still required.
 
+### Touch ID for 1Password
+
+An optional process-scoped integration can use the Mac's Touch ID to unlock
+1Password inside the guest. Existing synced passwords and passkeys stay managed
+by 1Password. See [setup and authorization boundaries](docs/onepassword-touch-id.md).
+
 ### Touch ID for sudo
+
+Guest clock recovery handles time lost during Mac sleep so fresh signed
+approvals remain usable after wake. Existing VMs need the
+[guest clock recovery installer](docs/guest-clock-recovery.md).
 
 The native authentication bridge can enroll this Mac and use
 Touch ID as a sufficient authentication method for guest `sudo`. Open
@@ -370,14 +380,13 @@ accept values between menu steps, down to the guest's 2048 MiB minimum. The
 ## Requirements
 
 - Apple Silicon Mac (`arm64`)
-- macOS 15 or newer
+- macOS 26 or newer
 - At least 8 GB free initially
 
 On M3 and newer Apple Silicon running macOS 26 or newer, Try Omarchy also
 exposes ARM EL2 to Linux, so the guest provides `/dev/kvm` for nested VMs and
-compatible VMMs. macOS 15 and older Apple Silicon Macs automatically keep the
-normal non-nested launch path. macOS 15 remains supported for running Omarchy;
-nested virtualization is disabled there to avoid a QEMU startup crash.
+compatible VMMs. Older Apple Silicon Macs automatically keep the normal
+non-nested launch path.
 
 ## Data and updates
 
@@ -419,6 +428,41 @@ local repository. Installing a newer Try Omarchy app therefore does not apply
 all of that app's factory-image changes to an existing VM, and an in-guest
 update should not be assumed to reproduce them. A confirmed reset is the
 deliberate, destructive way to start again from the newest bundled factory.
+
+### Repairing update holds in an older guest
+
+Older guests may fail Omarchy Update with conflicting `libaquamarine.so`
+dependencies. New factory images hold the compatible Hyprland, aquamarine,
+and Hyprtoolkit packages together, along with the direct-boot kernel and
+headers. Updating the Mac app does not add these holds to an existing guest.
+
+Copy `guest/scripts/repair-update-holds.py` from this source checkout into the
+guest, then run it **inside Omarchy**, with the updater closed:
+
+```sh
+python3 repair-update-holds.py          # preview only
+sudo python3 repair-update-holds.py --apply
+```
+
+The command adds missing holds to both `/usr/share/try-omarchy/pacman.conf`
+and `/etc/pacman.conf`. The first file is essential: Omarchy's pre-refresh
+hook restores it over the second before updating. Existing holds, comments,
+repository definitions, and unrelated settings are retained in each file.
+Keep any custom settings you want to survive an update in the saved share
+copy too; the existing update hook still replaces the active configuration.
+
+The repair prints a backup directory under
+`/var/lib/try-omarchy/update-holds-backup.*`, preserving both original files
+under their relative paths. To undo it, close the updater and restore each
+backup to its original location with `sudo cp -p`. Running the repair again
+makes no changes when the holds are already present. It refuses to write
+while pacman has a transaction lock.
+
+Then retry **Update → Omarchy**. This command only repairs the hold list; it
+does not install, downgrade, or upgrade packages, and cannot repair packages
+that were already upgraded into an incompatible combination. If dependency
+errors remain, retain the full error output for diagnosis instead of removing
+the kernel or compositor holds.
 
 ### Growing an existing VM disk
 
@@ -505,7 +549,7 @@ brew install pkg-config
 ```
 
 `make doctor` performs the basic preflight. `make runtime` downloads a
-checksum-pinned `arm64_sequoia` dependency set, builds QEMU and patched libslirp for macOS 15.0,
+checksum-pinned dependency set, builds QEMU and patched libslirp for macOS 26.0,
 and rejects any runtime image that raises that minimum or strongly imports an
 API unavailable on the declared platform. Installed Homebrew library versions
 are never copied into the app.
