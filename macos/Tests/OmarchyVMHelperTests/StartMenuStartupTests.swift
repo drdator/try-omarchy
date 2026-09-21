@@ -19,11 +19,11 @@ struct StartMenuStartupTests {
         defer { menu.dismiss() }
         menu.prepareForPresentation(visibleFrame: nil)
         let content = try #require(menu.window.contentView)
-        let checkbox = try #require(descendant(
-            withIdentifier: "automatic-start-checkbox", in: content
+        let toggle = try #require(descendant(
+            withIdentifier: "automatic-start-toggle", in: content
         ) as? NSButton)
-        #expect(checkbox.state == .off)
-        checkbox.performClick(nil)
+        #expect(toggle.state == .off)
+        toggle.performClick(nil)
         #expect(automaticStart)
         #expect(launchCount == 0)
 
@@ -31,11 +31,11 @@ struct StartMenuStartupTests {
         menu.launchOmarchy()
         #expect(launchCount == 1)
         #expect(!menu.window.isVisible)
-        let launchingCheckbox = try #require(descendant(
-            withIdentifier: "automatic-start-checkbox", in: content
+        let launchingToggle = try #require(descendant(
+            withIdentifier: "automatic-start-toggle", in: content
         ) as? NSButton)
-        #expect(launchingCheckbox.state == .on)
-        #expect(!launchingCheckbox.isEnabled)
+        #expect(launchingToggle.state == .on)
+        #expect(!launchingToggle.isEnabled)
     }
 
     @Test("Running settings can change startup and close without launching or quitting the VM")
@@ -55,11 +55,11 @@ struct StartMenuStartupTests {
         menu.virtualMachineDidStart { closeCount += 1 }
         menu.prepareForPresentation(visibleFrame: nil)
         let content = try #require(menu.window.contentView)
-        let checkbox = try #require(descendant(
-            withIdentifier: "automatic-start-checkbox", in: content
+        let toggle = try #require(descendant(
+            withIdentifier: "automatic-start-toggle", in: content
         ) as? NSButton)
-        #expect(checkbox.isEnabled)
-        checkbox.performClick(nil)
+        #expect(toggle.isEnabled)
+        toggle.performClick(nil)
         #expect(!automaticStart)
         for identifier in ["permission-action-folder", "permission-action-network", "permission-action-cpu"] {
             let button = try #require(descendant(withIdentifier: identifier, in: content) as? NSButton)
@@ -71,7 +71,7 @@ struct StartMenuStartupTests {
             #expect(try #require(descendant(withIdentifier: identifier, in: content) as? NSButton).isEnabled)
         }
         menu.shutdownDidBegin()
-        for identifier in ["automatic-start-checkbox", "permission-action-folder", "permission-action-network", "permission-action-cpu", "restart-vm-button", "manage-vm-button"] {
+        for identifier in ["automatic-start-toggle", "permission-action-folder", "permission-action-network", "permission-action-cpu", "restart-vm-button", "manage-vm-button"] {
             #expect(!(try #require(descendant(withIdentifier: identifier, in: content) as? NSButton)).isEnabled)
         }
         menu.launchOmarchy()

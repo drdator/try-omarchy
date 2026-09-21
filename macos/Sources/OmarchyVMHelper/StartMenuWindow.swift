@@ -746,7 +746,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         if let storageRow {
             integrationRowViews.append(storageRow)
         }
-        integrationRowViews.append(contentsOf: [resourceRow, networkingRow, portForwardingRow, immersiveRow, languageRow])
+        integrationRowViews.append(contentsOf: [resourceRow, networkingRow, portForwardingRow, immersiveRow, automaticStartSettingRow(), languageRow])
         let integrationStatus = GuestIntegrationCache.read(integrationCacheURL())
         integrationRowViews.insert(permissionRow(
             symbolName: "arrow.triangle.2.circlepath", title: "VM integrations",
@@ -894,25 +894,6 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         resetRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 64).isActive = true
         let resetCard = themedCard(containing: resetRow, identifier: "reset-card")
 
-        let automaticStart = NSButton(
-            checkboxWithTitle: "Start automatically",
-            target: self,
-            action: #selector(changeStartAutomatically(_:))
-        )
-        automaticStart.attributedTitle = NSAttributedString(string: "Start automatically", attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold),
-            .foregroundColor: OmarchyStartMenuTheme.foreground,
-        ])
-        automaticStart.state = startAutomatically() ? .on : .off
-        automaticStart.isEnabled = !controlsBusy && !resetInProgress
-        automaticStart.identifier = NSUserInterfaceItemIdentifier("automatic-start-checkbox")
-        let automaticStartHelp = virtualMachineRunning
-            ? "Open these settings anytime from Omarchy’s Setup menu or by searching for Try Omarchy Settings."
-            : "Skip this menu on launch. Hold Option while opening the app to show it again."
-        automaticStart.setAccessibilityHelp(automaticStartHelp)
-        let automaticStartCaption = NSTextField(wrappingLabelWithString: automaticStartHelp)
-        automaticStartCaption.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        automaticStartCaption.textColor = OmarchyStartMenuTheme.muted
         let restart = OmarchyActionButton(title: "Restart Try Omarchy…", style: .secondary, target: self, action: #selector(restartOmarchy))
         restart.heightAnchor.constraint(equalToConstant: 30).isActive = true
         restart.identifier = NSUserInterfaceItemIdentifier("restart-vm-button")
@@ -927,15 +908,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         runningActions.alignment = .leading
         runningActions.spacing = 6
         runningActions.identifier = NSUserInterfaceItemIdentifier("running-settings-actions")
-        let automaticStartSection = NSStackView(views: [automaticStart, automaticStartCaption])
-        automaticStartSection.orientation = .vertical
-        automaticStartSection.alignment = .leading
-        automaticStartSection.spacing = 3
-
         let settingsSections: [NSView] = [permissionHeading, permissionCard, integrationHeading, integrationCard]
         let stack = NSStackView(views: virtualMachineRunning
-            ? [headingStack, automaticStartSection, runningActions] + settingsSections + [resetHeading, resetCard]
-            : [headingStack] + settingsSections + [automaticStartSection, resetHeading, resetCard])
+            ? [headingStack, runningActions] + settingsSections + [resetHeading, resetCard]
+            : [headingStack] + settingsSections + [resetHeading, resetCard])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 18
@@ -988,8 +964,6 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             integrationCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
             resetCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
             launchButton.widthAnchor.constraint(equalTo: actions.widthAnchor),
-            automaticStartSection.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            automaticStartCaption.widthAnchor.constraint(equalTo: automaticStartSection.widthAnchor),
         ])
 
         if virtualMachineRunning {
@@ -1276,32 +1250,67 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     private func immersiveSettingRow(isEnabled: Bool) -> NSView {
+        let setting = toggleSettingRow(
+            titleText: "Immersive",
+            detailText: StartMenuPresentation.immersiveDetail(isEnabled: isEnabled),
+            symbolName: "arrow.up.left.and.arrow.down.right",
+            identifier: "immersive",
+            accessibilityLabel: "Immersive mode",
+            isEnabled: isEnabled,
+            action: #selector(changeImmersiveMode(_:))
+        )
+        immersiveCaption = setting.caption
+        return setting.row
+    }
+
+    private func automaticStartSettingRow() -> NSView {
+        let detail = virtualMachineRunning
+            ? "Skip the start menu on launch. Open settings anytime from Omarchy’s Setup menu."
+            : "Skip this menu on launch. Hold Option while opening the app to show it again."
+        return toggleSettingRow(
+            titleText: "Start automatically",
+            detailText: detail,
+            symbolName: "play.circle",
+            identifier: "automatic-start",
+            accessibilityLabel: "Start automatically",
+            isEnabled: startAutomatically(),
+            action: #selector(changeStartAutomatically(_:))
+        ).row
+    }
+
+    private func toggleSettingRow(
+        titleText: String,
+        detailText: String,
+        symbolName: String,
+        identifier: String,
+        accessibilityLabel: String,
+        isEnabled: Bool,
+        action: Selector
+    ) -> (row: NSView, caption: NSTextField) {
         let symbol = NSImageView()
         symbol.image = NSImage(
-            systemSymbolName: "arrow.up.left.and.arrow.down.right",
+            systemSymbolName: symbolName,
             accessibilityDescription: nil
         )
         symbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 19, weight: .medium)
         symbol.contentTintColor = OmarchyStartMenuTheme.accent
-        symbol.identifier = NSUserInterfaceItemIdentifier("immersive-symbol")
+        symbol.identifier = NSUserInterfaceItemIdentifier("\(identifier)-symbol")
         symbol.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             symbol.widthAnchor.constraint(equalToConstant: 26),
             symbol.heightAnchor.constraint(equalToConstant: 26),
         ])
 
-        let title = NSTextField(labelWithString: "Immersive")
+        let title = NSTextField(labelWithString: titleText)
         title.font = .monospacedSystemFont(ofSize: 13, weight: .bold)
         title.textColor = OmarchyStartMenuTheme.foreground
-        title.identifier = NSUserInterfaceItemIdentifier("immersive-title")
+        title.identifier = NSUserInterfaceItemIdentifier("\(identifier)-title")
 
-        let detailText = StartMenuPresentation.immersiveDetail(isEnabled: isEnabled)
         let detail = NSTextField(wrappingLabelWithString: detailText)
         detail.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         detail.textColor = OmarchyStartMenuTheme.muted
         detail.maximumNumberOfLines = 2
-        detail.identifier = NSUserInterfaceItemIdentifier("immersive-caption")
-        immersiveCaption = detail
+        detail.identifier = NSUserInterfaceItemIdentifier("\(identifier)-caption")
 
         let labels = NSStackView(views: [title, detail])
         labels.orientation = .vertical
@@ -1312,17 +1321,17 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         let toggle = OmarchyToggleButton(
             isOn: isEnabled,
             target: self,
-            action: #selector(changeImmersiveMode(_:))
+            action: action
         )
         toggle.isEnabled = !microphoneRequestInFlight && !controlsBusy && !resetInProgress
-        toggle.identifier = NSUserInterfaceItemIdentifier("immersive-toggle")
-        toggle.setAccessibilityLabel("Immersive mode")
+        toggle.identifier = NSUserInterfaceItemIdentifier("\(identifier)-toggle")
+        toggle.setAccessibilityLabel(accessibilityLabel)
         toggle.setAccessibilityTitleUIElement(title)
         toggle.setAccessibilityHelp(detailText)
         toggle.translatesAutoresizingMaskIntoConstraints = false
 
         let row = NSView()
-        row.identifier = NSUserInterfaceItemIdentifier("immersive-row")
+        row.identifier = NSUserInterfaceItemIdentifier("\(identifier)-row")
         row.translatesAutoresizingMaskIntoConstraints = false
         row.addSubview(symbol)
         row.addSubview(labels)
@@ -1339,7 +1348,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         ])
         labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
         labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return row
+        return (row, detail)
     }
 
     @objc private func beginAccessibilityRequest() {
@@ -1681,6 +1690,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     @objc private func changeStartAutomatically(_ sender: NSButton) {
         guard !controlsBusy, !resetInProgress else { return }
         setStartAutomatically(sender.state == .on)
+        (sender as? OmarchyToggleButton)?.refreshAppearance()
     }
 
     @objc func launchOmarchy() {
