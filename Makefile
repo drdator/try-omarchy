@@ -53,8 +53,10 @@ doctor:
 	@printf 'Toolchain ready: %s (%s)\n' "$$(sw_vers -productVersion)" "$$(uname -m)"
 
 test:
+	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/macos/Tests/test-network-identity.py"
 	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/macos/Tests/test-libslirp-icmp.py"
 	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/macos/Tests/test-cocoa-pinch.py"
+	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/macos/Tests/test-cocoa-scroll.py"
 	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/macos/Tests/test-cocoa-iso-keyboard.py"
 	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/macos/Tests/test-virtio-pinch.py"
 	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/tests/test-build-cache.py"
@@ -70,6 +72,7 @@ test:
 	@$(ROOT)/macos/Tests/run-qemu-ssh-contract.test.sh
 	@$(ROOT)/macos/Tests/qemu-memory-contract.test.sh
 	@$(ROOT)/macos/Tests/qemu-power-actions.test.sh
+	@$(ROOT)/macos/Tests/qemu-monitor-ready.test.sh
 	@$(ROOT)/macos/Tests/qemu-persistent-storage.test.sh
 	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/macos/Tests/resize-vm-disk.test.py"
 

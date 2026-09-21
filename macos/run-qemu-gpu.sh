@@ -1115,6 +1115,7 @@ work_dir=""
 owner_marker=""
 owner_token=""
 qemu_pid=""
+monitor_ready_pid=""
 audio_bridge_pid=""
 authentication_bridge_pid=""
 camera_bridge_pid=""
@@ -1145,6 +1146,9 @@ cleanup() {
   local status=$?
   trap - EXIT HUP INT TERM
   set +e
+  if [[ $monitor_ready_pid =~ ^[0-9]+$ ]]; then
+    terminate_child "$monitor_ready_pid" 20
+  fi
   if [[ $network_link_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$network_link_bridge_pid" 20
   fi
@@ -1654,7 +1658,7 @@ qemu_args=(
   -device 'virtio-9p-pci,fsdev=omarchy-settings,mount_tag=try-omarchy-settings,romfile='
   -device 'virtio-serial-pci,id=omarchy-serial'
   -chardev "socket,id=omarchy-settings-bridge,path=$settings_bridge_socket,server=on,wait=off"
-  -device 'virtserialport,bus=omarchy-serial.0,nr=5,chardev=omarchy-settings-bridge,name=dev.tryomarchy.settings'
+  -device 'virtserialport,bus=omarchy-serial.0,nr=6,chardev=omarchy-settings-bridge,name=dev.tryomarchy.settings'
   -chardev "stdio,id=omarchy-hvc0,signal=off,logfile=$console_log_option,logappend=off"
   -device 'virtconsole,bus=omarchy-serial.0,nr=0,chardev=omarchy-hvc0'
   -chardev "socket,id=omarchy-audio-bridge,path=$audio_bridge_socket,server=on,wait=off"
@@ -1752,6 +1756,17 @@ done
 [[ -S $camera_bridge_socket ]] || fail "QEMU did not create its private camera bridge socket"
 [[ -S $clipboard_bridge_socket ]] || fail "QEMU did not create its private clipboard bridge socket"
 [[ -S $settings_bridge_socket ]] || fail "QEMU did not create its private settings bridge socket"
+# The socket file appears before QEMU's main loop accepts connections, and the
+# helper tears the VM down if the monitor behind this line does not answer.
+# Use the bundled helper so release launches do not depend on host Python.
+# Wait on a child so Bash can service cancellation signals during slow init.
+"$native_bridge" --wait-for-qmp "$qemu_pid" "$qmp_socket" 9>&- &
+monitor_ready_pid=$!
+if ! wait "$monitor_ready_pid"; then
+  monitor_ready_pid=""
+  fail "QEMU's QMP monitor did not become ready"
+fi
+monitor_ready_pid=""
 echo "[qemu-gpu] Ready. QMP: $qmp_socket" >&2
 
 # FD 9 deliberately remains open only in QEMU. Letting the sibling audio

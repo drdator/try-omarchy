@@ -221,6 +221,24 @@ bridged launches do not request your password. QEMU continues to run as your
 user. **Remove Networking Helper** unregisters the service when it is no longer
 needed. Shut down any bridged VM before repairing or removing the helper.
 
+Persistent VMs keep a stable, randomly generated bridged MAC address across app
+updates, disk replacement, resizing, resets, and moves of the complete VM data
+folder. Existing saved addresses are retained when upgrading from older builds.
+The Networking sheet displays the address after the first bridged launch;
+**Copy MAC** makes it available for a DHCP reservation. **Generate new MAC…**
+shows a proposed address and requires confirmation while the VM is stopped.
+This action saves immediately; DHCP reservations may need updating. Cancelling
+the confirmation leaves the existing identity unchanged.
+
+A copy of the complete VM data folder includes its network identity. To run a
+copy as a separate VM, generate a new MAC before running both copies. Move or
+restore the complete data folder to retain the identity; importing only a disk
+into a new workspace does not transfer its network identity. Ephemeral bridged
+VMs receive a fresh address on each launch. Damaged identity records produce an
+error instead of silently changing the MAC. Migration and regeneration retain
+the preceding record as `network-identities/current.previous.json` in the VM
+data folder; restore a known-good record only with the VM stopped.
+
 For repeated local development builds, use a consistent Apple Development
 signing identity (the `DEVELOPMENT_SIGN_IDENTITY` option above). Ad-hoc-signed
 helper registrations are not reliable across rebuilds on the tested macOS
@@ -407,6 +425,30 @@ compatible VMMs. Older Apple Silicon Macs automatically keep the normal
 non-nested launch path.
 
 ## Data and updates
+
+### Check for Mac app updates
+
+The start menu shows the installed Mac app release and **Check for Updates…**;
+the native application menu offers the same command. The update window checks
+the project's latest stable GitHub release and links to its release notes and
+download. Review the release's macOS requirements before installing.
+
+**Automatically check for updates** is off by default. When enabled, opening
+the app checks at most once every 24 hours; a newer release changes the start
+menu link to **Update Available…**. Manual checks remain available at any time.
+Checks contact GitHub without a GitHub account, and failures do not block VM
+startup. This feature does not download or install app updates automatically.
+
+Older app bundles used the same version metadata for different releases. If
+the build does not include a matching release tag in its metadata, the window
+reports an unknown installed release or a development build instead of claiming
+that it is up to date. The latest release and manual download remain available.
+
+To upgrade, shut down Omarchy, quit the app, download the new DMG, and replace
+**Try Omarchy** in **Applications**. Reopen it to use your existing VM. You do
+not need to reset or delete the VM to update the Mac app.
+
+### Existing VM data
 
 Normal launches keep one persistent VM under
 `~/Library/Application Support/Try Omarchy/VM/v1`. Removing or updating the app

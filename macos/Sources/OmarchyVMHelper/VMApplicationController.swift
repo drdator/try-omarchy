@@ -70,6 +70,8 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let disposableWorkspace = DisposableVMWorkspace()
     private var isDisposable: Bool { initialArguments.first == QEMUGPUStorageOption.ephemeral.rawValue }
     private var settingsReturnApplication: NSRunningApplication?
+    private let appReleaseChecker = AppReleaseChecker()
+    private var appReleaseWindow: AppReleaseWindow?
     private var volumeObserver: NSObjectProtocol?
     private var hostPowerObserver: HostPowerNotificationObserver?
     private let hostSleepCoordinator = VMHostSleepCoordinator()
@@ -134,6 +136,10 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        appReleaseChecker.onChange = { [weak self] in
+            self?.startMenuWindow?.refreshAppReleaseStatus()
+            self?.appReleaseWindow?.refresh()
+        }
         observeVolumeUnmounts()
         observeHostPowerEvents()
         let startAutomatically = StartupPolicy.shouldStartAutomatically(
@@ -142,6 +148,14 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             initialArguments: initialArguments
         )
         prepareStartMenu(startAutomatically: startAutomatically)
+        appReleaseChecker.checkAutomaticallyIfDue()
+    }
+
+    @objc func checkForAppUpdates(_ sender: Any?) {
+        if appReleaseWindow == nil {
+            appReleaseWindow = AppReleaseWindow(checker: appReleaseChecker)
+        }
+        appReleaseWindow?.show()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -235,6 +249,11 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
                 do { try self?.networkStore.save(preferences); return nil }
                 catch { return error.localizedDescription }
             },
+            networkIdentity: VMNetworkIdentityAccess.forLaunch(arguments: initialArguments,
+                operation: { [weak self] arguments in
+                    guard let self else { throw HelperError.io("The VM controller is unavailable.") }
+                    return try self.networkIdentityOperation(arguments)
+                }),
             immersiveMode: { [weak self] in
                 self?.fullscreenPreferenceStore.load().isImmersive ?? true
             },
@@ -249,6 +268,11 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             setStartAutomatically: { [weak self] enabled in
                 self?.startupPreferenceStore.save(enabled)
             },
+            appVersionLabel: appReleaseChecker.installed.label,
+            appReleaseActionTitle: { [weak self] in
+                self?.appReleaseChecker.menuTitle ?? "Check for Updates…"
+            },
+            checkForAppUpdates: { [weak self] in self?.checkForAppUpdates(nil) },
             languageStatus: { [weak self] in
                 LanguageMenuState.make(
                     preference: self?.languagePreferenceStore.load() ?? .systemDefault,
@@ -449,6 +473,18 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         /// Set when a chosen data folder could not be validated. Starting the
         /// launcher anyway would silently retarget the default workspace.
         let storageUnavailableReason: String?
+    }
+
+    private func networkIdentityOperation(_ arguments: [String]) throws -> String {
+        let context = childLaunchContext()
+        if let error = context.storageUnavailableReason { throw HelperError.io(error) }
+        guard let root = QEMUGPUStorageSpaceEstimate.storageRootURL(
+            environment: context.environment, preference: storageLocationStore.load()),
+              let resources = Bundle.main.resourceURL else {
+            throw HelperError.io("The VM data folder is unavailable.")
+        }
+        return try VMNetworkIdentityAccess.operation(arguments, root: root, resources: resources,
+            environment: context.environment, bundleIdentity: bundledMetrics?.identity)
     }
 
     private func resolvedNetworkPreferences() -> VMNetworkPreferences {
