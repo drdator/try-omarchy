@@ -172,6 +172,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let setImmersiveMode: (Bool) -> Void
     private let startAutomatically: () -> Bool
     private let setStartAutomatically: (Bool) -> Void
+    private let languageStatus: () -> LanguageMenuState
+    private let setLanguage: (String?) -> Void
     private let integrationCacheURL: () -> URL?
     private let launch: () -> Void
     private let canResetStorage: Bool
@@ -269,6 +271,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         setImmersiveMode: @escaping (Bool) -> Void = { _ in },
         startAutomatically: @escaping () -> Bool = { false },
         setStartAutomatically: @escaping (Bool) -> Void = { _ in },
+        languageStatus: @escaping () -> LanguageMenuState = { .systemDefault },
+        setLanguage: @escaping (String?) -> Void = { _ in },
         integrationCacheURL: @escaping () -> URL? = { nil },
         launch: @escaping () -> Void
     ) {
@@ -301,6 +305,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.setImmersiveMode = setImmersiveMode
         self.startAutomatically = startAutomatically
         self.setStartAutomatically = setStartAutomatically
+        self.languageStatus = languageStatus
+        self.setLanguage = setLanguage
         self.integrationCacheURL = integrationCacheURL
         self.launch = launch
 
@@ -665,6 +671,25 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             minimumHeight: 72
         )
 
+        let languageState = languageStatus()
+        let languagePresentation = StartMenuPresentation.language(state: languageState)
+        let languageRow = permissionRow(
+            symbolName: "globe",
+            title: "Language",
+            detail: languagePresentation.detail,
+            granted: languagePresentation.isNonDefault,
+            statusLabels: (languagePresentation.statusLabel, languagePresentation.statusLabel),
+            actions: [
+                (
+                    languagePresentation.actionTitle,
+                    languagePresentation.isNonDefault
+                        ? #selector(useDefaultLanguage)
+                        : #selector(selectTraditionalChineseLanguage)
+                ),
+            ],
+            actionsEnabled: languageState.supportsSelection
+        )
+
         let storageStatus = storageLocationStatus()
         var storageRow: NSView?
         if let storagePath = storageLocation() {
@@ -721,7 +746,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         if let storageRow {
             integrationRowViews.append(storageRow)
         }
-        integrationRowViews.append(contentsOf: [resourceRow, networkingRow, portForwardingRow, immersiveRow])
+        integrationRowViews.append(contentsOf: [resourceRow, networkingRow, portForwardingRow, immersiveRow, languageRow])
         let integrationStatus = GuestIntegrationCache.read(integrationCacheURL())
         integrationRowViews.insert(permissionRow(
             symbolName: "arrow.triangle.2.circlepath", title: "VM integrations",
@@ -1593,6 +1618,18 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 .priority: NSAccessibilityPriorityLevel.medium.rawValue,
             ]
         )
+    }
+
+    @objc private func selectTraditionalChineseLanguage() {
+        guard !launchInProgress, !resetInProgress else { return }
+        setLanguage(GuestLocaleCatalog.traditionalChinese.localeToken)
+        render()
+    }
+
+    @objc private func useDefaultLanguage() {
+        guard !launchInProgress, !resetInProgress else { return }
+        setLanguage(nil)
+        render()
     }
 
     private func confirmReset() {
