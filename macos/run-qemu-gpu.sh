@@ -818,6 +818,8 @@ if any(argument.startswith("omarchy.shared_folder_name=") for argument in argume
     fail("kernel command line already contains a shared folder name")
 if any(argument.startswith("tryomarchy.ssh_access=") for argument in arguments):
     fail("kernel command line contains a launcher-owned SSH activation argument")
+if any(argument.startswith("tryomarchy.keyboard=") for argument in arguments):
+    fail("kernel command line contains a launcher-owned keyboard geometry argument")
 
 records = manifest.get("artifacts")
 if not isinstance(records, list) or len(records) != len(expected_artifacts):
@@ -927,6 +929,9 @@ case " $kernel_command_line " in
   *' tryomarchy.ssh_access='*)
     fail "validated kernel command line contains a launcher-owned SSH activation argument"
     ;;
+  *' tryomarchy.keyboard='*)
+    fail "validated kernel command line contains a launcher-owned keyboard geometry argument"
+    ;;
 esac
 if [[ ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} == 1 ]]; then
   printf '%s\n' "$bundle_validation"
@@ -966,6 +971,23 @@ if ((QEMU_PORT_FORWARDING_ENABLES_SSH)); then
 fi
 if [[ $QEMU_NETWORK_MODE == bridged && $QEMU_NETWORK_SSH == 1 ]]; then
   ssh_kernel_argument=' tryomarchy.ssh_access=1'
+fi
+
+keyboard_kernel_argument=""
+if ((reset_only)); then
+  unset TRYOMARCHY_KEYBOARD
+else
+  host_keyboard_geometry=$("$native_bridge" --host-keyboard-geometry) || {
+    fail "cannot detect the host Mac keyboard geometry"
+  }
+  case "$host_keyboard_geometry" in
+    ansi|iso|jis) ;;
+    *)
+      fail "host Mac keyboard geometry is invalid: $host_keyboard_geometry"
+      ;;
+  esac
+  keyboard_kernel_argument=" tryomarchy.keyboard=$host_keyboard_geometry"
+  export TRYOMARCHY_KEYBOARD=$host_keyboard_geometry
 fi
 
 host_cpu_count=$(
@@ -1081,6 +1103,7 @@ authentication_bridge_pid=""
 camera_bridge_pid=""
 clipboard_bridge_pid=""
 network_link_bridge_pid=""
+integration_bridge_pid=""
 
 terminate_child() {
   local pid=$1
@@ -1107,6 +1130,9 @@ cleanup() {
   set +e
   if [[ $network_link_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$network_link_bridge_pid" 20
+  fi
+  if [[ $integration_bridge_pid =~ ^[0-9]+$ ]]; then
+    terminate_child "$integration_bridge_pid" 20
   fi
   if [[ $qemu_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$qemu_pid" 40
@@ -1281,29 +1307,32 @@ recover_persistent_boot_kit() {
   recovery_command_line+=' rootflags=noload fsck.mode=skip tryomarchy.export_boot=1'
 
   echo '[qemu-gpu] Pairing the saved VM with its original boot files (one time).' >&2
-  "$qemu_bin" \
-    -name 'Try Omarchy Boot Recovery' \
-    -machine "$qemu_machine" \
-    -cpu 'host,pmu=off' \
-    -smp '2,sockets=1,cores=2,threads=1' \
-    -m 2G \
-    -nodefaults \
-    -no-reboot \
-    -display none \
-    -serial none \
-    -monitor none \
-    -qmp "unix:$qmp_socket,server=on,wait=off" \
-    -kernel "$bundled_kernel" \
-    -initrd "$bundled_initramfs" \
-    -append "$recovery_command_line" \
-    -drive "if=none,id=omarchy-recovery-root,file=$working_disk,format=raw,media=disk,cache=none,readonly=on" \
-    -device 'virtio-blk-pci,drive=omarchy-recovery-root,serial=omarchy-root' \
-    -device 'virtio-serial-pci,id=omarchy-recovery-serial' \
-    -chardev 'stdio,id=omarchy-recovery-hvc0,signal=off' \
-    -device 'virtconsole,bus=omarchy-recovery-serial.0,nr=0,chardev=omarchy-recovery-hvc0' \
-    -fsdev "local,id=omarchy-boot-export,path=$boot_export_dir,security_model=none,multidevs=remap" \
-    -device 'virtio-9p-pci,fsdev=omarchy-boot-export,mount_tag=try-omarchy-boot-export,romfile=' \
-    -add-fd "$QEMU_PERSISTENT_STORAGE_QEMU_ADD_FD" &
+  (
+    unset TRYOMARCHY_KEYBOARD
+    exec "$qemu_bin" \
+      -name 'Try Omarchy Boot Recovery' \
+      -machine "$qemu_machine" \
+      -cpu 'host,pmu=off' \
+      -smp '2,sockets=1,cores=2,threads=1' \
+      -m 2G \
+      -nodefaults \
+      -no-reboot \
+      -display none \
+      -serial none \
+      -monitor none \
+      -qmp "unix:$qmp_socket,server=on,wait=off" \
+      -kernel "$bundled_kernel" \
+      -initrd "$bundled_initramfs" \
+      -append "$recovery_command_line" \
+      -drive "if=none,id=omarchy-recovery-root,file=$working_disk,format=raw,media=disk,cache=none,readonly=on" \
+      -device 'virtio-blk-pci,drive=omarchy-recovery-root,serial=omarchy-root' \
+      -device 'virtio-serial-pci,id=omarchy-recovery-serial' \
+      -chardev 'stdio,id=omarchy-recovery-hvc0,signal=off' \
+      -device 'virtconsole,bus=omarchy-recovery-serial.0,nr=0,chardev=omarchy-recovery-hvc0' \
+      -fsdev "local,id=omarchy-boot-export,path=$boot_export_dir,security_model=none,multidevs=remap" \
+      -device 'virtio-9p-pci,fsdev=omarchy-boot-export,mount_tag=try-omarchy-boot-export,romfile=' \
+      -add-fd "$QEMU_PERSISTENT_STORAGE_QEMU_ADD_FD"
+  ) &
   qemu_pid=$!
   printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid" || \
     boot_recovery_fail 'could not record the recovery process'
@@ -1396,6 +1425,7 @@ authentication_bridge_socket="/tmp/${work_dir##*/}/authentication.sock"
 camera_bridge_socket="/tmp/${work_dir##*/}/camera.sock"
 clipboard_bridge_socket="/tmp/${work_dir##*/}/clipboard.sock"
 settings_bridge_socket="/tmp/${work_dir##*/}/settings.sock"
+integration_bridge_socket="/tmp/${work_dir##*/}/integrations.sock"
 audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
 mkdir -m 700 "$work_dir/audio-routes"
 
@@ -1580,7 +1610,7 @@ qemu_args=(
   -qmp "unix:$qmp_socket,server=on,wait=off"
   -kernel "$launch_kernel"
   -initrd "$launch_initramfs"
-  -append "$launch_kernel_command_line omarchy.qemu_virgl=1 omarchy.virgl_dual_source=1$shared_folder_kernel_argument$ssh_kernel_argument$settings_kernel_argument"
+  -append "$launch_kernel_command_line omarchy.qemu_virgl=1 omarchy.virgl_dual_source=1$shared_folder_kernel_argument$ssh_kernel_argument$settings_kernel_argument$keyboard_kernel_argument"
   -drive "if=none,id=omarchy-root,file=$working_disk,format=raw,media=disk,cache=writeback"
   -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
   -device "$gpu_device"
@@ -1612,6 +1642,16 @@ qemu_args=(
   -chardev "socket,id=omarchy-camera-bridge,path=$camera_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=4,chardev=omarchy-camera-bridge,name=dev.tryomarchy.camera'
 )
+
+if [[ -f $resources_dir/integrations/manifest.json ]]; then
+  integration_share_option=${resources_dir//,/,,}/integrations
+  qemu_args+=(
+    -fsdev "local,id=omarchy-updates,path=$integration_share_option,security_model=none,readonly=on"
+    -device 'virtio-9p-pci,fsdev=omarchy-updates,mount_tag=tryomarchy-updates,romfile='
+    -chardev "socket,id=omarchy-integrations,path=$integration_bridge_socket,server=on,wait=off"
+    -device 'virtserialport,bus=omarchy-serial.0,nr=5,chardev=omarchy-integrations,name=dev.tryomarchy.integrations'
+  )
+fi
 
 if [[ -n $shared_folder ]]; then
   # security_model=none performs every host operation as this Mac user and
@@ -1725,6 +1765,17 @@ start_camera_bridge() {
 }
 start_camera_bridge
 camera_bridge_restarts=0
+
+if [[ -f $resources_dir/integrations/manifest.json ]]; then
+  integration_cache="$work_dir/integration-status.json"
+  if [[ $QEMU_SELECTED_STORAGE_MODE == persistent ]]; then
+    integration_disk_inode=$(stat -f %i "$working_disk")
+    integration_cache="${QEMU_PERSISTENT_STORAGE_DISKS_ROOT%/disks}/integration-status-$integration_disk_inode.json"
+  fi
+  "$native_bridge" --bridge-integrations "$qemu_pid" "$integration_bridge_socket" \
+    "$integration_cache" 9>&- &
+  integration_bridge_pid=$!
+fi
 
 # Bash 3.2 has no `wait -n`. The native-audio bridge is required for the guest
 # transport, so watch it alongside QEMU and fail if it exits unexpectedly.

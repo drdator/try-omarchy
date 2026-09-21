@@ -209,6 +209,7 @@ for relative in \
   etc/skel/.config/omarchy/extensions/omarchy-menu.jsonc; do
   install -m 0644 "$repo_dir/guest/native-overlay/$relative" "$settings_payload/${relative##*/}"
 done
+python3 "$repo_dir/integrations/build-bundle.py" "$contents/Resources/integrations"
 for guest_resource in \
   LICENSE.omarchy \
   SHA256SUMS \

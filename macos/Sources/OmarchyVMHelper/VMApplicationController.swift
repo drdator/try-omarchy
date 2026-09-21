@@ -246,6 +246,12 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             setStartAutomatically: { [weak self] enabled in
                 self?.startupPreferenceStore.save(enabled)
             },
+            integrationCacheURL: { [weak self] in
+                guard let self else { return nil }
+                return GuestIntegrationCache.url(storageRoot: QEMUGPUStorageSpaceEstimate.storageRootURL(
+                    environment: self.baseEnvironment, preference: self.storageLocationStore.load()
+                ))
+            },
             launch: { [weak self] in
                 self?.startVirtualMachine()
             }
